@@ -7,6 +7,7 @@ import fs, { promises as fsPromises } from "fs";
 import path from "path";
 import { createObjectCsvWriter } from "csv-writer";
 import csv from "csv-parser";
+import http from "http";
 import dotenv from "dotenv";
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
@@ -304,6 +305,44 @@ bot.command("download_csv", async (ctx) => {
 initializeCsv();
 bot.launch();
 console.log("KwentaKo Bot (ESM) is running...");
+
+// -------------------------------------------------------------------
+// Simple HTTP health-check endpoint (no extra deps)
+// -------------------------------------------------------------------
+const PORT = process.env.PORT || 3000;
+
+const server = http.createServer(async (req, res) => {
+  if (req.method === "GET" && (req.url === "/health" || req.url === "/ping")) {
+    try {
+      const exists = fs.existsSync(CSV_FILE);
+      const stats = exists ? await fsPromises.stat(CSV_FILE) : null;
+
+      const payload = {
+        status: "ok",
+        uptime_seconds: process.uptime(),
+        csv_exists: exists,
+        csv_size_bytes: stats ? stats.size : 0,
+        port: Number(PORT),
+      };
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(payload));
+      return;
+    } catch (e) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "error", message: String(e) }));
+      return;
+    }
+  }
+
+  // Not found for any other path
+  res.writeHead(404, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ status: "not_found" }));
+});
+
+server.listen(PORT, () => {
+  console.log(`Health endpoint available at http://localhost:${PORT}/health`);
+});
 
 // Enable graceful stop
 process.once("SIGINT", () => bot.stop("SIGINT"));
