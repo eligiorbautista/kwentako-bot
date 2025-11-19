@@ -108,6 +108,7 @@ const generateInitialCSV = () => {
 # Total Records: 0
 #
 # CATEGORY BREAKDOWN:
+Date,Description,Amount (PHP),Category
 # Food: PHP 0.00 (0%)
 # Transportation: PHP 0.00 (0%)
 # Supplies: PHP 0.00 (0%)
@@ -115,7 +116,6 @@ const generateInitialCSV = () => {
 # Personal: PHP 0.00 (0%)
 # Other: PHP 0.00 (0%)
 #
-Date,Description,Amount (PHP),Category
 `;
 };
 
@@ -679,7 +679,24 @@ bot.on("text", async (ctx) => {
     const blobMetadata = await writeBlobContent(updatedContent);
     console.log("Blob write result:", blobMetadata);
 
-    // 7. CALCULATE STATISTICS FOR RESPONSE
+    // 7. GET FRESH DOWNLOAD URL
+    let downloadUrl = blobMetadata.url;
+    try {
+      // Get the fresh blob listing to ensure we have the correct URL
+      const { blobs } = await list({
+        token: BLOB_READ_WRITE_TOKEN,
+        prefix: "expenses/",
+      });
+      const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
+      if (targetBlob && targetBlob.url) {
+        downloadUrl = targetBlob.url;
+        console.log("Using fresh blob URL:", downloadUrl);
+      }
+    } catch (listError) {
+      console.log("Failed to get fresh URL, using blob metadata URL:", listError.message);
+    }
+
+    // 8. CALCULATE STATISTICS FOR RESPONSE
     const newTotal = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
     const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
@@ -695,7 +712,7 @@ bot.on("text", async (ctx) => {
           allRecords.length
         } records (PHP ${grandTotal.toFixed(2)})\n` +
         `${parsingMethod}\n\n` +
-        `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
+        `📥 Download CSV: <a href="${downloadUrl}">Click here</a>\n\n` +
         `🔍 Updated: ${new Date().toISOString()}`
     );
   } catch (error) {
