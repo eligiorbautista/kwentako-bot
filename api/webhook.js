@@ -21,58 +21,50 @@ const SHEET_NAME = process.env.SHEET_NAME || "Sheet1";
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
 
-// Fail-fast check — stop early so missing config is obvious. Do not continue
-// when required secrets are missing.
-if (!BOT_TOKEN || !GEMINI_API_KEY || !SPREADSHEET_ID) {
-  console.error(
-    "FATAL: Required configuration variables are missing (BOT_TOKEN, GEMINI_API_KEY, SPREADSHEET_ID)."
-  );
-  throw new Error("Missing required configuration variables.");
-}
-
 // -------------------------------------------------------------------
-// 2. Client Setup & Authentication
+// 1. Client Setup & Authentication (WITH DEBUG LOGS)
 // -------------------------------------------------------------------
-
-// Build Google Sheets auth robustly. Accept either:
-//  - GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY (raw key with \n escaped), OR
-//  - GOOGLE_PRIVATE_KEY contains the full service-account JSON string
-let sheets;
-try {
-  let clientEmail = GOOGLE_CLIENT_EMAIL;
-  let privateKey = GOOGLE_PRIVATE_KEY;
-
-  if (privateKey && privateKey.trim().startsWith("{")) {
-    // GOOGLE_PRIVATE_KEY contains a full service-account JSON string
-    const sa = JSON.parse(privateKey);
-    clientEmail = sa.client_email;
-    privateKey = sa.private_key;
-  }
-
-  if (!clientEmail || !privateKey) {
-    throw new Error(
-      "Google service account email or private key is missing. Set GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY, or provide full service-account JSON in GOOGLE_PRIVATE_KEY."
-    );
-  }
-
-  const auth = new google.auth.JWT({
-    email: clientEmail,
-    key: privateKey.replace(/\\n/g, "\n"),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-
-  sheets = google.sheets({ version: "v4", auth });
-} catch (err) {
-  console.error(
-    "FATAL: Failed to configure Google Sheets auth:",
-    err.message || err
-  );
-  throw err;
-}
 
 const bot = new Telegraf(BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const model = "gemini-2.5-flash";
+
+// Fail-safe check for Vercel logs
+if (!BOT_TOKEN || !GEMINI_API_KEY || !SPREADSHEET_ID || !GOOGLE_PRIVATE_KEY) {
+  console.error("FATAL: Configuration variables are missing.");
+}
+
+// Sheets Auth Setup
+const privateKeyFormatted = GOOGLE_PRIVATE_KEY
+  ? GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n")
+  : "";
+
+// --- VERCEL DEBUG LOGS START ---
+console.log("--- ENV CHECK START ---");
+console.log(`SHEET ID: ${SPREADSHEET_ID}`);
+console.log(`Client Email: ${GOOGLE_CLIENT_EMAIL}`);
+console.log(
+  `Private Key Length: ${GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY.length : "0"}`
+);
+console.log(
+  `Private Key Start: ${
+    GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY.substring(0, 50) : "N/A"
+  }`
+);
+console.log(
+  `Formatted Key Newline Count: ${
+    (privateKeyFormatted.match(/\n/g) || []).length
+  }`
+);
+console.log("--- ENV CHECK END ---");
+// --- VERCEL DEBUG LOGS END ---
+
+const auth = new google.auth.JWT({
+  email: GOOGLE_CLIENT_EMAIL,
+  key: privateKeyFormatted,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
+const sheets = google.sheets({ version: "v4", auth });
 
 // --- Gemini Schema Definition ---
 const expenseSchema = z.object({
@@ -95,14 +87,13 @@ const responseSchema = z.array(expenseSchema);
 const jsonSchema = zodToJsonSchema(responseSchema);
 
 // -------------------------------------------------------------------
-// 3. Google Sheets Functions
+// 2. Google Sheets Functions
 // -------------------------------------------------------------------
 
 /**
  * Uses Gemini to parse Philippine expense text into structured JSON data.
  */
 const parseExpensesWithAI = async (text) => {
-  // Prompt includes localization context
   const prompt = `You are an expert financial assistant operating in the Philippines. Analyze the following user input and extract all separate expenses. Assume all currency is in Philippine Peso (PHP) unless otherwise specified. Input: "${text}"`;
 
   const response = await ai.models.generateContent({
@@ -116,7 +107,7 @@ const parseExpensesWithAI = async (text) => {
 
   const rawJson = response.text.trim();
   const parsedData = JSON.parse(rawJson);
-  const date = new Date().toLocaleDateString("en-PH"); // Localized date
+  const date = new Date().toLocaleDateString("en-PH");
 
   return parsedData.map((record) => ({ ...record, date }));
 };
@@ -125,7 +116,6 @@ const parseExpensesWithAI = async (text) => {
  * Appends records to the Google Sheet.
  */
 const appendRecordsToSheet = async (records) => {
-  // Transform records to arrays: [Date, Description, Amount, Category]
   const rows = records.map((r) => [
     r.date,
     r.description,
@@ -133,9 +123,10 @@ const appendRecordsToSheet = async (records) => {
     r.category,
   ]);
 
+  // *** This is the line that throws the Sheets API authentication error ***
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:D`, // Assumes columns A, B, C, D
+    range: `${SHEET_NAME}!A:D`,
     valueInputOption: "USER_ENTERED",
     resource: {
       values: rows,
@@ -152,7 +143,7 @@ const getStatsFromSheet = async () => {
     range: `${SHEET_NAME}!A:D`,
   });
 
-  const rows = response.data.values ? response.data.values.slice(1) : []; // Skip header row
+  const rows = response.data.values ? response.data.values.slice(1) : [];
 
   let totalAmount = 0;
   const categoryTotals = {};
@@ -215,7 +206,7 @@ Simply send me your expenses, and **Gemini AI** will log them into your Google S
   ctx.replyWithMarkdown(welcomeMessage);
 });
 
-bot.help((ctx) => {
+bot.help(async (ctx) => {
   const helpMessage = `
 📚 **Available Commands:**
 * \`/download_csv\`: Sends you the latest statistics and a download link.
@@ -251,7 +242,10 @@ bot.on("text", async (ctx) => {
       } items to Google Sheet. Total: ₱${total.toFixed(2)}`
     );
   } catch (error) {
-    console.error("Error processing with Sheets:", error);
+    // Log the full error to Vercel logs for inspection
+    console.error("Error processing with Sheets:", error.message);
+
+    // Respond to the user with the generic error message
     ctx.reply(
       "Error saving data. Check your Sheet ID, Permissions, or Vercel logs."
     );
@@ -265,7 +259,6 @@ bot.command("download_csv", async (ctx) => {
 
     await ctx.replyWithMarkdown(summary);
 
-    // Send a direct download/view link
     const viewUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/edit`;
     const downloadUrl = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/export?format=xlsx&id=${SPREADSHEET_ID}`;
 
@@ -275,7 +268,7 @@ bot.command("download_csv", async (ctx) => {
 * **Download Excel (.xlsx):** <a href="${downloadUrl}">Download File</a>
         `);
   } catch (error) {
-    console.error("Error with Google Sheets API:", error);
+    console.error("Error with Google Sheets API:", error.message);
     ctx.reply(
       "Could not access Google Sheets. Check your API key and Sheet ID/Permissions."
     );
@@ -286,16 +279,15 @@ bot.command("download_csv", async (ctx) => {
 // 5. Vercel Handler Function (The Webhook Entry Point)
 // -------------------------------------------------------------------
 
-// This function is what Vercel executes on every incoming HTTP request (webhook)
 export default async (req, res) => {
-  try {
-    // Let Telegraf process the update object
-    await bot.handleUpdate(req.body);
+  // This check is a final failsafe, though Vercel should be running the setup above
+  if (!BOT_TOKEN) return res.status(500).send("Configuration Error");
 
-    // Send a quick response back to Telegram
+  try {
+    await bot.handleUpdate(req.body, res);
     res.status(200).send("OK");
   } catch (error) {
-    console.error("Vercel Webhook execution error:", error.message || error);
+    console.error("Vercel Webhook execution error:", error.message);
     res.status(500).send("Internal Server Error");
   }
 };
