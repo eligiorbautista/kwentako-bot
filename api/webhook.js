@@ -5,7 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import dotenv from "dotenv";
-import { put, getBlob, list } from "@vercel/blob";
+import { put, getDownloadUrl, list } from "@vercel/blob";
 
 // Load environment variables
 dotenv.config();
@@ -60,16 +60,26 @@ const jsonSchema = zodToJsonSchema(responseSchema);
  */
 const readBlobContent = async () => {
   try {
-    const response = await getBlob(BLOB_FILE_KEY, {
-      token: BLOB_READ_WRITE_TOKEN, // Uses the correctly mapped token
-      cache: "no-store",
-      type: "text",
+    // Get the download URL for the blob
+    const downloadUrl = await getDownloadUrl(BLOB_FILE_KEY, {
+      token: BLOB_READ_WRITE_TOKEN,
     });
+
+    // Fetch the content from the URL
+    const response = await fetch(downloadUrl);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
 
     return await response.text();
   } catch (error) {
     // If the file doesn't exist (404), return the initial header row
-    if (error.status === 404 || error.message.includes("file not found")) {
+    if (
+      error.message.includes("404") ||
+      error.message.includes("file not found") ||
+      error.message.includes("BlobNotFoundError")
+    ) {
       return "Date,Description,Amount (PHP),Category\n";
     }
     throw new Error(`Blob Read Error: ${error.message}`);
