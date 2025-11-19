@@ -5,7 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import dotenv from "dotenv";
-import { put, get, list } from "@vercel/blob"; // Vercel Blob Import
+import { put, get, list } from "@vercel/blob";
 
 // Load environment variables
 dotenv.config();
@@ -13,8 +13,11 @@ dotenv.config();
 // --- CONFIGURATION ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN =
-  process.env.BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN; // Vercel Blob Token
+
+// --- FIX: Using the Vercel-generated variable name ---
+const BLOB_READ_WRITE_TOKEN =
+  process.env.BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN;
+
 const CREATOR_NAME = "Eli Bautista";
 const BLOB_FILE_KEY = "expenses/kwentako_data.csv";
 
@@ -53,18 +56,16 @@ const jsonSchema = zodToJsonSchema(responseSchema);
 
 /**
  * Reads the existing CSV content from the Vercel Blob store.
- * Initializes with headers if the file is not found (404).
  * @returns {string} The raw CSV content.
  */
 const readBlobContent = async () => {
   try {
     const response = await get(BLOB_FILE_KEY, {
-      token: BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN,
+      token: BLOB_READ_WRITE_TOKEN, // Uses the correctly mapped token
       cache: "no-store",
       type: "text",
     });
 
-    // returns the raw content string
     return await response.text();
   } catch (error) {
     // If the file doesn't exist (404), return the initial header row
@@ -81,10 +82,9 @@ const readBlobContent = async () => {
  * @returns {object} The blob metadata, including the public URL.
  */
 const writeBlobContent = async (newContent) => {
-  // The 'put' operation automatically overwrites (replaces) the existing file
   return await put(BLOB_FILE_KEY, newContent, {
-    token: BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN,
-    access: "public", // Set to public so the user can download it directly
+    token: BLOB_READ_WRITE_TOKEN, // Uses the correctly mapped token
+    access: "public",
     contentType: "text/csv",
   });
 };
