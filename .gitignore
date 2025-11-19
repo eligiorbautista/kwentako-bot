@@ -1,0 +1,28 @@
+# Node
+node_modules/
+npm-debug.log*
+.yarn-integrity
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Env
+.env
+.env.*.local
+
+# Build
+dist/
+build/
+coverage/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OneDrive temp
+~$*
