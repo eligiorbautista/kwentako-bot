@@ -28,7 +28,7 @@ if (!BOT_TOKEN || !GEMINI_API_KEY || !BLOB_READ_WRITE_TOKEN) {
 
 const bot = new Telegraf(BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-const model = "gemini-1.5-flash"; // Lighter model, sufficient for expense parsing
+const model = "gemini-2.5-flash"; // Lighter model, sufficient for expense parsing
 
 // --- Simplified Schema for Better Performance ---
 const expenseSchema = z.object({
