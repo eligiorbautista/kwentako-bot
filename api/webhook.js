@@ -105,16 +105,16 @@ const generateInitialCSV = () => {
   return `# KwentaKo Expense Tracker
 # Generated: ${timestamp}
 # Creator: ${CREATOR_NAME}
-# Total Expenses: ₱0.00
+# Total Expenses: PHP 0.00
 # Total Records: 0
 #
 # CATEGORY BREAKDOWN:
-# Food: ₱0.00 (0%)
-# Transportation: ₱0.00 (0%)
-# Supplies: ₱0.00 (0%)
-# Utilities: ₱0.00 (0%)
-# Personal: ₱0.00 (0%)
-# Other: ₱0.00 (0%)
+# Food: PHP 0.00 (0%)
+# Transportation: PHP 0.00 (0%)
+# Supplies: PHP 0.00 (0%)
+# Utilities: PHP 0.00 (0%)
+# Personal: PHP 0.00 (0%)
+# Other: PHP 0.00 (0%)
 #
 Date,Description,Amount (PHP),Category
 `;
@@ -154,7 +154,7 @@ const generateCompleteCSV = (expenseRecords) => {
       const amount = categoryTotals[cat] || 0;
       const percentage =
         total > 0 ? ((amount / total) * 100).toFixed(1) : "0.0";
-      return `# ${cat}: ₱${amount.toFixed(2)} (${percentage}%)`;
+      return `# ${cat}: PHP ${amount.toFixed(2)} (${percentage}%)`;
     })
     .join("\n");
 
@@ -162,7 +162,7 @@ const generateCompleteCSV = (expenseRecords) => {
   const header = `# KwentaKo Expense Tracker
 # Generated: ${timestamp}
 # Creator: ${CREATOR_NAME}
-# Total Expenses: ₱${total.toFixed(2)}
+# Total Expenses: PHP ${total.toFixed(2)}
 # Total Records: ${expenseRecords.length}
 #
 # CATEGORY BREAKDOWN:
@@ -519,14 +519,22 @@ bot.command("verify", async (ctx) => {
   try {
     const content = await readBlobContent();
     const lines = content.split("\n").filter((line) => line.trim() !== "");
-    const recordCount = lines.length - 1; // Subtract header
+    const recordCount = lines.filter(line => !line.startsWith('#')).length - 1; // Subtract header, ignore comments
+
+    // Get the current blob URL dynamically
+    const { blobs } = await list({
+      token: BLOB_READ_WRITE_TOKEN,
+      prefix: "expenses/",
+    });
+    const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
+    const downloadUrl = targetBlob ? targetBlob.url : '#';
 
     await ctx.replyWithHTML(
       `🔍 <b>Current CSV Status:</b>\n` +
         `📊 Total records: ${recordCount}\n` +
         `📝 File size: ${content.length} characters\n\n` +
-        `📥 <a href="https://cmb6ns1ho2tybzsb.public.blob.vercel-storage.com/expenses/kwentako_data.csv">Download Latest CSV</a>\n\n` +
-        `<code>${content}</code>`
+        `📥 <a href="${downloadUrl}">Download Latest CSV</a>\n\n` +
+        `<code>${content.substring(0, 1000)}${content.length > 1000 ? '...' : ''}</code>`
     );
   } catch (error) {
     ctx.reply(`❌ Error reading blob: ${error.message}`);
@@ -643,8 +651,8 @@ bot.on("text", async (ctx) => {
     const parsingMethod = isManualParsing ? "📝 Manual parsing used (AI overloaded)" : "🤖 AI parsing";
 
     await ctx.replyWithHTML(
-      `✅ Added ${newRecords.length} new expenses (₱${newTotal.toFixed(2)})\n` +
-        `📊 Total expenses: ${allRecords.length} records (₱${grandTotal.toFixed(2)})\n` +
+      `✅ Added ${newRecords.length} new expenses (PHP ${newTotal.toFixed(2)})\n` +
+        `📊 Total expenses: ${allRecords.length} records (PHP ${grandTotal.toFixed(2)})\n` +
         `${parsingMethod}\n\n` +
         `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
         `🔍 Updated: ${new Date().toISOString()}`
