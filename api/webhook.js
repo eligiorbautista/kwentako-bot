@@ -102,9 +102,8 @@ const generateInitialCSV = () => {
   const now = new Date();
   const timestamp = now.toISOString();
 
-  return `# KwentaKo Expense Tracker
-# Generated: ${timestamp}
-# Creator: ${CREATOR_NAME}
+  return `# KwentaKo Expense Tracker by Eli Bautista
+# Generated: ${timestamp} 
 # Total Expenses: PHP 0.00
 # Total Records: 0
 #
@@ -358,21 +357,21 @@ const writeBlobContent = async (newContent) => {
  */
 const parseExpensesManually = (text) => {
   const date = new Date().toLocaleDateString("en-PH");
-  
+
   // Simple regex patterns for common expense formats
   const patterns = [
     // "item for 150", "lunch 200", "taxi 50"
     /(.+?)\s+(?:for|cost|price|worth|)\s*(?:php|₱|pesos?|)\s*(\d+(?:\.\d{2})?)/gi,
-    // "150 for item", "200 lunch", "₱50 taxi"  
+    // "150 for item", "200 lunch", "₱50 taxi"
     /(?:php|₱|pesos?|)\s*(\d+(?:\.\d{2})?)\s+(?:for|)\s*(.+)/gi,
     // Just numbers with context "bought something 150"
-    /(.+?)\s+(\d+(?:\.\d{2})?)$/gi
+    /(.+?)\s+(\d+(?:\.\d{2})?)$/gi,
   ];
-  
+
   const results = [];
   let amount = null;
   let description = text.trim();
-  
+
   for (const pattern of patterns) {
     const matches = [...text.matchAll(pattern)];
     if (matches.length > 0) {
@@ -382,39 +381,70 @@ const parseExpensesManually = (text) => {
         amount = parseFloat(match[1]);
         description = match[2].trim();
       } else {
-        // Description first pattern  
+        // Description first pattern
         description = match[1].trim();
         amount = parseFloat(match[2]);
       }
       break;
     }
   }
-  
+
   // If no amount found, try to extract any number
   if (!amount) {
     const numberMatch = text.match(/(\d+(?:\.\d{2})?)/);
     if (numberMatch) {
       amount = parseFloat(numberMatch[1]);
-      description = text.replace(numberMatch[0], '').trim();
+      description = text.replace(numberMatch[0], "").trim();
     }
   }
-  
+
   // Default fallback
   if (!amount) {
     amount = 0;
     description = text;
   }
-  
+
   // Simple category guessing
   let category = "Other";
   const lowerText = text.toLowerCase();
-  if (lowerText.includes('food') || lowerText.includes('lunch') || lowerText.includes('dinner') || lowerText.includes('meal') || lowerText.includes('eat')) category = "Food";
-  else if (lowerText.includes('taxi') || lowerText.includes('bus') || lowerText.includes('transport') || lowerText.includes('fare')) category = "Transportation";
-  else if (lowerText.includes('office') || lowerText.includes('work') || lowerText.includes('supplies')) category = "Supplies";
-  else if (lowerText.includes('bill') || lowerText.includes('electric') || lowerText.includes('water') || lowerText.includes('internet')) category = "Utilities";
-  else if (lowerText.includes('personal') || lowerText.includes('health') || lowerText.includes('medical')) category = "Personal";
-  
-  return [{ date, description: description || "Manual entry", amount, category }];
+  if (
+    lowerText.includes("food") ||
+    lowerText.includes("lunch") ||
+    lowerText.includes("dinner") ||
+    lowerText.includes("meal") ||
+    lowerText.includes("eat")
+  )
+    category = "Food";
+  else if (
+    lowerText.includes("taxi") ||
+    lowerText.includes("bus") ||
+    lowerText.includes("transport") ||
+    lowerText.includes("fare")
+  )
+    category = "Transportation";
+  else if (
+    lowerText.includes("office") ||
+    lowerText.includes("work") ||
+    lowerText.includes("supplies")
+  )
+    category = "Supplies";
+  else if (
+    lowerText.includes("bill") ||
+    lowerText.includes("electric") ||
+    lowerText.includes("water") ||
+    lowerText.includes("internet")
+  )
+    category = "Utilities";
+  else if (
+    lowerText.includes("personal") ||
+    lowerText.includes("health") ||
+    lowerText.includes("medical")
+  )
+    category = "Personal";
+
+  return [
+    { date, description: description || "Manual entry", amount, category },
+  ];
 };
 
 /**
@@ -432,7 +462,7 @@ const parseExpensesWithAI = async (text, maxRetries = 3) => {
   if (timeSinceLastCall < GEMINI_MIN_DELAY) {
     const waitTime = GEMINI_MIN_DELAY - timeSinceLastCall;
     console.log(`Rate limiting: waiting ${waitTime}ms`);
-    await new Promise(resolve => setTimeout(resolve, waitTime));
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
   }
   lastGeminiCall = Date.now();
 
@@ -477,7 +507,9 @@ const parseExpensesWithAI = async (text, maxRetries = 3) => {
         if (attempt < maxRetries) {
           // Increased exponential backoff for overloaded servers
           const waitTime = Math.pow(3, attempt) * 2000; // 6s, 18s, 54s
-          console.log(`Server overloaded, waiting ${waitTime}ms before retry...`);
+          console.log(
+            `Server overloaded, waiting ${waitTime}ms before retry...`
+          );
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           continue;
         } else {
@@ -519,7 +551,8 @@ bot.command("verify", async (ctx) => {
   try {
     const content = await readBlobContent();
     const lines = content.split("\n").filter((line) => line.trim() !== "");
-    const recordCount = lines.filter(line => !line.startsWith('#')).length - 1; // Subtract header, ignore comments
+    const recordCount =
+      lines.filter((line) => !line.startsWith("#")).length - 1; // Subtract header, ignore comments
 
     // Get the current blob URL dynamically
     const { blobs } = await list({
@@ -527,14 +560,16 @@ bot.command("verify", async (ctx) => {
       prefix: "expenses/",
     });
     const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
-    const downloadUrl = targetBlob ? targetBlob.url : '#';
+    const downloadUrl = targetBlob ? targetBlob.url : "#";
 
     await ctx.replyWithHTML(
       `🔍 <b>Current CSV Status:</b>\n` +
         `📊 Total records: ${recordCount}\n` +
         `📝 File size: ${content.length} characters\n\n` +
         `📥 <a href="${downloadUrl}">Download Latest CSV</a>\n\n` +
-        `<code>${content.substring(0, 1000)}${content.length > 1000 ? '...' : ''}</code>`
+        `<code>${content.substring(0, 1000)}${
+          content.length > 1000 ? "..." : ""
+        }</code>`
     );
   } catch (error) {
     ctx.reply(`❌ Error reading blob: ${error.message}`);
@@ -620,8 +655,8 @@ bot.on("text", async (ctx) => {
     }
 
     // Check if manual parsing was used (fallback indicator)
-    const isManualParsing = newRecords.some(record => 
-      record.amount === 0 || record.description === "Manual entry"
+    const isManualParsing = newRecords.some(
+      (record) => record.amount === 0 || record.description === "Manual entry"
     );
 
     // 2. READ EXISTING BLOB DATA
@@ -648,11 +683,17 @@ bot.on("text", async (ctx) => {
     const newTotal = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
     const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
-    const parsingMethod = isManualParsing ? "📝 Manual parsing used (AI overloaded)" : "🤖 AI parsing";
+    const parsingMethod = isManualParsing
+      ? "📝 Manual parsing used (AI overloaded)"
+      : "🤖 AI parsing";
 
     await ctx.replyWithHTML(
-      `✅ Added ${newRecords.length} new expenses (PHP ${newTotal.toFixed(2)})\n` +
-        `📊 Total expenses: ${allRecords.length} records (PHP ${grandTotal.toFixed(2)})\n` +
+      `✅ Added ${newRecords.length} new expenses (PHP ${newTotal.toFixed(
+        2
+      )})\n` +
+        `📊 Total expenses: ${
+          allRecords.length
+        } records (PHP ${grandTotal.toFixed(2)})\n` +
         `${parsingMethod}\n\n` +
         `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
         `🔍 Updated: ${new Date().toISOString()}`
