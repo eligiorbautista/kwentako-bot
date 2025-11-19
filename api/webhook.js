@@ -180,12 +180,34 @@ const readBlobContent = async () => {
  * @returns {object} The blob metadata, including the public URL.
  */
 const writeBlobContent = async (newContent) => {
-  return await put(BLOB_FILE_KEY, newContent, {
-    token: BLOB_READ_WRITE_TOKEN, // Uses the correctly mapped token
-    access: "public",
-    contentType: "text/csv",
-    allowOverwrite: true, // Allow overwriting existing blob
-  });
+  console.log("Writing content to blob, length:", newContent.length);
+  console.log("Content being written:", newContent);
+  
+  // Create a unique filename to avoid caching issues
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const uniqueFilename = `expenses/kwentako_data_${timestamp}.csv`;
+  
+  // Write to both the main file and a timestamped backup
+  const results = await Promise.all([
+    // Main file (with overwrite)
+    put(BLOB_FILE_KEY, newContent, {
+      token: BLOB_READ_WRITE_TOKEN,
+      access: "public",
+      contentType: "text/csv",
+      allowOverwrite: true,
+    }),
+    // Timestamped backup
+    put(uniqueFilename, newContent, {
+      token: BLOB_READ_WRITE_TOKEN,
+      access: "public", 
+      contentType: "text/csv",
+    })
+  ]);
+  
+  console.log("Main file write result:", results[0]);
+  console.log("Backup file write result:", results[1]);
+  
+  return results[0]; // Return the main file result
 };
 
 /**
@@ -266,6 +288,25 @@ Simply send me your expenses. I will log them to secure Vercel Blob storage and 
   ctx.replyWithMarkdown(welcomeMessage);
 });
 
+// Add verification command
+bot.command('verify', async (ctx) => {
+  try {
+    const content = await readBlobContent();
+    const lines = content.split('\n').filter(line => line.trim() !== '');
+    const recordCount = lines.length - 1; // Subtract header
+    
+    await ctx.replyWithHTML(
+      `🔍 <b>Current CSV Status:</b>\n` +
+      `📊 Total records: ${recordCount}\n` +
+      `📝 File size: ${content.length} characters\n\n` +
+      `📥 <a href="https://cmb6ns1ho2tybzsb.public.blob.vercel-storage.com/expenses/kwentako_data.csv">Download Latest CSV</a>\n\n` +
+      `<code>${content}</code>`
+    );
+  } catch (error) {
+    ctx.reply(`❌ Error reading blob: ${error.message}`);
+  }
+});
+
 // Main text handler
 bot.on("text", async (ctx) => {
   const text = ctx.message.text;
@@ -327,10 +368,13 @@ bot.on("text", async (ctx) => {
 
     // 6. CONFIRMATION AND DOWNLOAD LINK
     const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
+    const totalLines = updatedContent.split('\n').filter(line => line.trim() !== '').length;
 
     await ctx.replyWithHTML(
-      `✅ Saved ${newRecords.length} items. Total: ₱${total.toFixed(2)}\n\n` +
-        `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>`
+      `✅ Saved ${newRecords.length} items. Total: ₱${total.toFixed(2)}\n` +
+      `📊 CSV now has ${totalLines - 1} expense records\n\n` +
+      `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
+      `🔍 Debug: File updated at ${new Date().toISOString()}`
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
