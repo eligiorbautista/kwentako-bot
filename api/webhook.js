@@ -15,56 +15,77 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CREATOR_NAME = "Eli Bautista";
 
-// --- GOOGLE SHEETS CONFIG ---
+// --- GOOGLE SHEETS CONFIG (OLD VARIABLES USED FOR DEBUGGING) ---
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 const SHEET_NAME = process.env.SHEET_NAME || "Sheet1";
+// These are deprecated in favor of the BASE64 key, but kept for debugging the old error
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
+const BASE64_CREDENTIALS = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64; // NEW: The robust key
 
 // -------------------------------------------------------------------
-// 1. Client Setup & Authentication (WITH DEBUG LOGS)
+// 1. Client Setup & Authentication (CRITICAL FIX IMPLEMENTED HERE)
 // -------------------------------------------------------------------
 
 const bot = new Telegraf(BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const model = "gemini-2.5-flash";
 
-// Fail-safe check for Vercel logs
-if (!BOT_TOKEN || !GEMINI_API_KEY || !SPREADSHEET_ID || !GOOGLE_PRIVATE_KEY) {
-  console.error("FATAL: Configuration variables are missing.");
+let sheets;
+let auth;
+let authError = null;
+
+try {
+  let credentials = {};
+
+  // 1. Check if the robust BASE64 key is available
+  if (BASE64_CREDENTIALS) {
+    // Decode the entire JSON file contents
+    const decodedCredentialsString = Buffer.from(
+      BASE64_CREDENTIALS,
+      "base64"
+    ).toString("utf-8");
+    credentials = JSON.parse(decodedCredentialsString);
+    console.log("--- AUTH: Using Base64 Credentials (Robust Method) ---");
+  } else {
+    // Fallback to the old method (which is currently failing)
+    console.log(
+      "--- AUTH: Falling back to Raw Key Method (Expect OpenSSL Error) ---"
+    );
+    credentials.client_email = GOOGLE_CLIENT_EMAIL;
+    credentials.private_key = GOOGLE_PRIVATE_KEY
+      ? GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n")
+      : "";
+  }
+
+  // 2. Initialize JWT Client
+  auth = new google.auth.JWT({
+    email: credentials.client_email,
+    key: credentials.private_key,
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  // 3. Initialize Sheets Client
+  sheets = google.sheets({ version: "v4", auth });
+} catch (error) {
+  // Catch the decoding or initialization error
+  authError = error;
+  console.error(
+    "FATAL AUTH ERROR: Key failed to decode/authenticate. Check BASE64 format.",
+    error.message
+  );
+  sheets = null;
 }
 
-// Sheets Auth Setup
-const privateKeyFormatted = GOOGLE_PRIVATE_KEY
-  ? GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n")
-  : "";
-
-// --- VERCEL DEBUG LOGS START ---
+// --- DEBUG LOGS FOR VERCEL ---
 console.log("--- ENV CHECK START ---");
 console.log(`SHEET ID: ${SPREADSHEET_ID}`);
-console.log(`Client Email: ${GOOGLE_CLIENT_EMAIL}`);
+console.log(`Auth Status: ${sheets ? "Initialized" : "FAILED"}`);
 console.log(
-  `Private Key Length: ${GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY.length : "0"}`
-);
-console.log(
-  `Private Key Start: ${
-    GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY.substring(0, 50) : "N/A"
-  }`
-);
-console.log(
-  `Formatted Key Newline Count: ${
-    (privateKeyFormatted.match(/\n/g) || []).length
-  }`
+  `Base64 Variable Status: ${BASE64_CREDENTIALS ? "PRESENT" : "MISSING"}`
 );
 console.log("--- ENV CHECK END ---");
-// --- VERCEL DEBUG LOGS END ---
-
-const auth = new google.auth.JWT({
-  email: GOOGLE_CLIENT_EMAIL,
-  key: privateKeyFormatted,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
-const sheets = google.sheets({ version: "v4", auth });
+// -----------------------------
 
 // --- Gemini Schema Definition ---
 const expenseSchema = z.object({
@@ -116,6 +137,16 @@ const parseExpensesWithAI = async (text) => {
  * Appends records to the Google Sheet.
  */
 const appendRecordsToSheet = async (records) => {
+  // Check for authentication failure before proceeding
+  if (!sheets) {
+    // Re-throw the original auth error
+    throw new Error(
+      authError
+        ? authError.message
+        : "Authentication failed during initialization."
+    );
+  }
+
   const rows = records.map((r) => [
     r.date,
     r.description,
@@ -123,7 +154,6 @@ const appendRecordsToSheet = async (records) => {
     r.category,
   ]);
 
-  // *** This is the line that throws the Sheets API authentication error ***
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A:D`,
@@ -134,10 +164,18 @@ const appendRecordsToSheet = async (records) => {
   });
 };
 
-/**
- * Fetches all data from the sheet and calculates statistics.
- */
+// ... (getStatsFromSheet remains the same, using the global 'sheets' client) ...
 const getStatsFromSheet = async () => {
+  // Check for authentication failure before proceeding
+  if (!sheets) {
+    throw new Error(
+      authError
+        ? authError.message
+        : "Authentication failed during initialization."
+    );
+  }
+  // ... rest of getStatsFromSheet logic ...
+
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
     range: `${SHEET_NAME}!A:D`,
@@ -171,7 +209,7 @@ const getStatsFromSheet = async () => {
   );
 
   let categoryBreakdown = Object.entries(categoryTotals)
-    .map(([cat, sum]) => `\n   - ${cat}: ₱${sum.toFixed(2)}`)
+    .map(([cat, sum]) => `\n   - ${cat}: ₱${sum.toFixed(2)}`)
     .join("");
 
   const summary = `
@@ -190,9 +228,10 @@ const getStatsFromSheet = async () => {
 
   return { summary };
 };
+// ... (End of getStatsFromSheet) ...
 
 // -------------------------------------------------------------------
-// 4. Bot Commands and Handlers
+// 3. Bot Commands and Handlers
 // -------------------------------------------------------------------
 
 bot.start(async (ctx) => {
@@ -233,6 +272,7 @@ bot.on("text", async (ctx) => {
     }
 
     // --- WRITE TO GOOGLE SHEETS ---
+    // If successful, this line means the Base64 key worked.
     await appendRecordsToSheet(newRecords);
 
     const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
@@ -242,37 +282,13 @@ bot.on("text", async (ctx) => {
       } items to Google Sheet. Total: ₱${total.toFixed(2)}`
     );
   } catch (error) {
-    // Log the full error to Vercel logs for inspection
-    // Log the whole error object to make debugging easier in logs
+    // Log the full error object to Vercel logs for inspection
     console.error("Error processing with Sheets:", error);
 
-    // Send a safer, more helpful message to the user when running in debug mode.
-    // In production we keep the generic message to avoid leaking sensitive info.
-    const isDebug =
-      process.env.DEBUG === "true" || process.env.NODE_ENV !== "production";
-
-    const baseMessage =
-      "Error saving data. Check your Sheet ID, Permissions, or Vercel logs.";
-
-    if (isDebug) {
-      // Keep the message concise for the user but include the error message and
-      // a short, truncated stack preview to speed up triage during development.
-      const errMessage = error && error.message ? error.message : String(error);
-      const stackPreview =
-        error && error.stack
-          ? error.stack.split("\n").slice(0, 4).join("\n")
-          : null;
-
-      const debugReply = stackPreview
-        ? `Error saving data: ${errMessage}\n\nStack (truncated):\n${stackPreview}`
-        : `Error saving data: ${errMessage}`;
-
-      // Use await here because we're inside an async handler
-      await ctx.reply(debugReply);
-    } else {
-      // Production: do not include internals in the reply
-      await ctx.reply(baseMessage);
-    }
+    // Reply to the user with the authentication message
+    ctx.reply(
+      "Error saving data. If this persists, the Google Sheet credentials (Private Key or Sharing Permissions) are incorrect."
+    );
   }
 });
 
@@ -300,24 +316,23 @@ bot.command("download_csv", async (ctx) => {
 });
 
 // -------------------------------------------------------------------
-// 5. Vercel Handler Function (The Webhook Entry Point)
+// 4. Vercel Handler Function (FINAL FIX FOR HTTP HEADERS)
 // -------------------------------------------------------------------
 
-// --- FIX: Telegraf handles the response, so we don't send a second one ---
 export default async (req, res) => {
   try {
     // Handle the incoming webhook from Telegram
     await bot.handleUpdate(req.body, res);
 
-    // Vercel only needs the 200 OK signal, which Telegraf often handles implicitly.
-    // We will send it manually IF Telegraf hasn't already crashed or responded.
-    // We MUST check if headers have been sent before sending the final status.
+    // Send 200 OK ONLY if the response hasn't been sent by ctx.reply inside the handlers
     if (!res.headersSent) {
       res.status(200).send("OK");
     }
   } catch (error) {
+    // Log the execution error (usually occurs if the request structure is bad)
     console.error("Vercel Webhook execution error:", error.message);
-    // Ensure we only send an error if we haven't already replied via Telegram
+
+    // Ensure we only send a 500 status if no reply was sent via Telegram
     if (!res.headersSent) {
       res.status(500).send("Internal Server Error");
     }
