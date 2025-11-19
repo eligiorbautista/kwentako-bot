@@ -46,6 +46,10 @@ const model = "gemini-2.5-flash"; // Lighter model, sufficient for expense parsi
 const processedMessages = new Set();
 const MESSAGE_CACHE_SIZE = 100;
 
+// Rate limiting for Gemini API
+let lastGeminiCall = 0;
+const GEMINI_MIN_DELAY = 2000; // 2 seconds between calls
+
 // --- Simplified Schema for Better Performance ---
 const expenseSchema = z.object({
   description: z.string().describe("Brief expense description"),
@@ -350,6 +354,70 @@ const writeBlobContent = async (newContent) => {
 };
 
 /**
+ * Manual expense parsing as fallback when Gemini fails
+ */
+const parseExpensesManually = (text) => {
+  const date = new Date().toLocaleDateString("en-PH");
+  
+  // Simple regex patterns for common expense formats
+  const patterns = [
+    // "item for 150", "lunch 200", "taxi 50"
+    /(.+?)\s+(?:for|cost|price|worth|)\s*(?:php|₱|pesos?|)\s*(\d+(?:\.\d{2})?)/gi,
+    // "150 for item", "200 lunch", "₱50 taxi"  
+    /(?:php|₱|pesos?|)\s*(\d+(?:\.\d{2})?)\s+(?:for|)\s*(.+)/gi,
+    // Just numbers with context "bought something 150"
+    /(.+?)\s+(\d+(?:\.\d{2})?)$/gi
+  ];
+  
+  const results = [];
+  let amount = null;
+  let description = text.trim();
+  
+  for (const pattern of patterns) {
+    const matches = [...text.matchAll(pattern)];
+    if (matches.length > 0) {
+      const match = matches[0];
+      if (pattern === patterns[1]) {
+        // Amount first pattern
+        amount = parseFloat(match[1]);
+        description = match[2].trim();
+      } else {
+        // Description first pattern  
+        description = match[1].trim();
+        amount = parseFloat(match[2]);
+      }
+      break;
+    }
+  }
+  
+  // If no amount found, try to extract any number
+  if (!amount) {
+    const numberMatch = text.match(/(\d+(?:\.\d{2})?)/);
+    if (numberMatch) {
+      amount = parseFloat(numberMatch[1]);
+      description = text.replace(numberMatch[0], '').trim();
+    }
+  }
+  
+  // Default fallback
+  if (!amount) {
+    amount = 0;
+    description = text;
+  }
+  
+  // Simple category guessing
+  let category = "Other";
+  const lowerText = text.toLowerCase();
+  if (lowerText.includes('food') || lowerText.includes('lunch') || lowerText.includes('dinner') || lowerText.includes('meal') || lowerText.includes('eat')) category = "Food";
+  else if (lowerText.includes('taxi') || lowerText.includes('bus') || lowerText.includes('transport') || lowerText.includes('fare')) category = "Transportation";
+  else if (lowerText.includes('office') || lowerText.includes('work') || lowerText.includes('supplies')) category = "Supplies";
+  else if (lowerText.includes('bill') || lowerText.includes('electric') || lowerText.includes('water') || lowerText.includes('internet')) category = "Utilities";
+  else if (lowerText.includes('personal') || lowerText.includes('health') || lowerText.includes('medical')) category = "Personal";
+  
+  return [{ date, description: description || "Manual entry", amount, category }];
+};
+
+/**
  * Uses Gemini to parse Philippine expense text into structured JSON data with retry logic.
  */
 const parseExpensesWithAI = async (text, maxRetries = 3) => {
@@ -358,15 +426,23 @@ const parseExpensesWithAI = async (text, maxRetries = 3) => {
     throw new Error("Empty input text");
   }
 
+  // Rate limiting check
+  const now = Date.now();
+  const timeSinceLastCall = now - lastGeminiCall;
+  if (timeSinceLastCall < GEMINI_MIN_DELAY) {
+    const waitTime = GEMINI_MIN_DELAY - timeSinceLastCall;
+    console.log(`Rate limiting: waiting ${waitTime}ms`);
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+  lastGeminiCall = Date.now();
+
   // Limit input length to prevent excessive token usage
-  const maxLength = 500;
+  const maxLength = 300; // Reduced from 500
   const trimmedText =
     text.length > maxLength ? text.substring(0, maxLength) + "..." : text;
 
   // Shorter, more efficient prompt
-  const prompt = `Extract expenses from this Philippine text. Return JSON array with description, amount (PHP), and category (Food/Transportation/Supplies/Utilities/Personal/Other):
-
-"${trimmedText}"`;
+  const prompt = `Extract expenses from: "${trimmedText}". Return JSON array: [{description: string, amount: number, category: "Food"|"Transportation"|"Supplies"|"Utilities"|"Personal"|"Other"}]`;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -375,7 +451,7 @@ const parseExpensesWithAI = async (text, maxRetries = 3) => {
         contents: prompt,
         config: {
           responseMimeType: "application/json",
-          responseSchema: simplifiedJsonSchema, // Using the lighter schema
+          responseSchema: simplifiedJsonSchema,
         },
       });
 
@@ -395,18 +471,29 @@ const parseExpensesWithAI = async (text, maxRetries = 3) => {
         error.message.includes("503") ||
         error.message.includes("overloaded") ||
         error.message.includes("UNAVAILABLE") ||
-        error.message.includes("rate limit")
+        error.message.includes("rate limit") ||
+        error.message.includes("429")
       ) {
         if (attempt < maxRetries) {
-          // Exponential backoff: wait 2^attempt seconds
-          const waitTime = Math.pow(2, attempt) * 1000;
-          console.log(`Waiting ${waitTime}ms before retry...`);
+          // Increased exponential backoff for overloaded servers
+          const waitTime = Math.pow(3, attempt) * 2000; // 6s, 18s, 54s
+          console.log(`Server overloaded, waiting ${waitTime}ms before retry...`);
           await new Promise((resolve) => setTimeout(resolve, waitTime));
           continue;
+        } else {
+          // If all retries failed, fall back to manual parsing
+          console.log("Gemini API exhausted, falling back to manual parsing");
+          return parseExpensesManually(text);
         }
       }
 
-      // If it's not a retryable error or we've exhausted retries, throw the error
+      // For other errors, also fall back to manual parsing on final attempt
+      if (attempt === maxRetries) {
+        console.log("Final attempt failed, falling back to manual parsing");
+        return parseExpensesManually(text);
+      }
+
+      // If it's not a retryable error, throw immediately
       throw error;
     }
   }
@@ -451,23 +538,23 @@ bot.on("text", async (ctx) => {
   const text = ctx.message.text;
   const userId = ctx.message.from.id;
   const messageId = ctx.message.message_id;
-  
+
   // Create a unique identifier for this message
   const messageKey = `${userId}:${messageId}:${text.substring(0, 50)}`;
-  
+
   // Check if we've already processed this message
   if (processedMessages.has(messageKey)) {
     console.log("Skipping duplicate message:", messageKey);
     return;
   }
-  
+
   // Add to processed messages (with size limit)
   processedMessages.add(messageKey);
   if (processedMessages.size > MESSAGE_CACHE_SIZE) {
     const firstKey = processedMessages.values().next().value;
     processedMessages.delete(firstKey);
   }
-  
+
   // Skip if it's a command
   if (text.startsWith("/")) return;
 
@@ -483,18 +570,20 @@ bot.on("text", async (ctx) => {
   }
 
   // Enhanced filtering for non-expense messages
-  const nonExpensePatterns = /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|what|how|why|good|bad|nice|cool|awesome|great|perfect|done|finished|complete|stop|end|quit|exit|help|info|about)$/i;
-  
+  const nonExpensePatterns =
+    /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|what|how|why|good|bad|nice|cool|awesome|great|perfect|done|finished|complete|stop|end|quit|exit|help|info|about)$/i;
+
   // Check for bot-like responses (emojis, formatted text patterns)
   const botResponsePatterns = /^[✅❌📊📥🔍🤖]/i;
   const htmlLinkPattern = /<a href=/i;
   const csvDataPattern = /^(Date|#|\d{4}-\d{2}-\d{2})/i;
-  
-  if (nonExpensePatterns.test(text.trim()) || 
-      botResponsePatterns.test(text.trim()) || 
-      htmlLinkPattern.test(text) ||
-      csvDataPattern.test(text)) {
-    
+
+  if (
+    nonExpensePatterns.test(text.trim()) ||
+    botResponsePatterns.test(text.trim()) ||
+    htmlLinkPattern.test(text) ||
+    csvDataPattern.test(text)
+  ) {
     console.log("Filtered out non-expense message:", text);
     return ctx.reply(
       "I help track expenses. Please send me details like 'bought lunch 150 pesos' or 'taxi fare 80 php'."
@@ -502,23 +591,30 @@ bot.on("text", async (ctx) => {
   }
 
   // Additional check: if message looks like a previous expense entry, skip it
-  if (text.includes(',"') && text.includes(',')) {
+  if (text.includes(',"') && text.includes(",")) {
     console.log("Skipping what appears to be CSV data:", text);
-    return ctx.reply("I see that looks like CSV data. Please send me new expense details in natural language.");
+    return ctx.reply(
+      "I see that looks like CSV data. Please send me new expense details in natural language."
+    );
   }
 
   console.log(`Processing expense message from user ${userId}: "${text}"`);
 
   try {
-    await ctx.reply("🤖 Analyzing expense with Gemini AI...");
+    await ctx.reply("🤖 Processing your expense...");
 
-    // 1. PARSE NEW EXPENSES
+    // 1. PARSE NEW EXPENSES (with fallback to manual parsing)
     const newRecords = await parseExpensesWithAI(text);
     if (newRecords.length === 0) {
       return ctx.reply(
         "❌ Could not extract any expenses from your message. Try being more specific about amount and description."
       );
     }
+
+    // Check if manual parsing was used (fallback indicator)
+    const isManualParsing = newRecords.some(record => 
+      record.amount === 0 || record.description === "Manual entry"
+    );
 
     // 2. READ EXISTING BLOB DATA
     const existingContent = await readBlobContent();
@@ -544,11 +640,12 @@ bot.on("text", async (ctx) => {
     const newTotal = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
     const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
+    const parsingMethod = isManualParsing ? "📝 Manual parsing used (AI overloaded)" : "🤖 AI parsing";
+
     await ctx.replyWithHTML(
       `✅ Added ${newRecords.length} new expenses (₱${newTotal.toFixed(2)})\n` +
-        `📊 Total expenses: ${allRecords.length} records (₱${grandTotal.toFixed(
-          2
-        )})\n\n` +
+        `📊 Total expenses: ${allRecords.length} records (₱${grandTotal.toFixed(2)})\n` +
+        `${parsingMethod}\n\n` +
         `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
         `🔍 Updated: ${new Date().toISOString()}`
     );
