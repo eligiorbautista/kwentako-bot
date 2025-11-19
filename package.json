@@ -12,7 +12,7 @@
   "license": "ISC",
   "author": "\"Eli Bautista\"",
   "type": "module",
-  "main": "index.js",
+  "main": "api/webhook.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node api/webhook.js"

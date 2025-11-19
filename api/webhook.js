@@ -21,26 +21,58 @@ const SHEET_NAME = process.env.SHEET_NAME || "Sheet1";
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
 
-// Fail-safe check
-if (!BOT_TOKEN || !GEMINI_API_KEY || !SPREADSHEET_ID || !GOOGLE_PRIVATE_KEY) {
-  console.error("FATAL: Configuration variables are missing.");
+// Fail-fast check — stop early so missing config is obvious. Do not continue
+// when required secrets are missing.
+if (!BOT_TOKEN || !GEMINI_API_KEY || !SPREADSHEET_ID) {
+  console.error(
+    "FATAL: Required configuration variables are missing (BOT_TOKEN, GEMINI_API_KEY, SPREADSHEET_ID)."
+  );
+  throw new Error("Missing required configuration variables.");
 }
 
 // -------------------------------------------------------------------
 // 2. Client Setup & Authentication
 // -------------------------------------------------------------------
 
+// Build Google Sheets auth robustly. Accept either:
+//  - GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY (raw key with \n escaped), OR
+//  - GOOGLE_PRIVATE_KEY contains the full service-account JSON string
+let sheets;
+try {
+  let clientEmail = GOOGLE_CLIENT_EMAIL;
+  let privateKey = GOOGLE_PRIVATE_KEY;
+
+  if (privateKey && privateKey.trim().startsWith("{")) {
+    // GOOGLE_PRIVATE_KEY contains a full service-account JSON string
+    const sa = JSON.parse(privateKey);
+    clientEmail = sa.client_email;
+    privateKey = sa.private_key;
+  }
+
+  if (!clientEmail || !privateKey) {
+    throw new Error(
+      "Google service account email or private key is missing. Set GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY, or provide full service-account JSON in GOOGLE_PRIVATE_KEY."
+    );
+  }
+
+  const auth = new google.auth.JWT({
+    email: clientEmail,
+    key: privateKey.replace(/\\n/g, "\n"),
+    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+  });
+
+  sheets = google.sheets({ version: "v4", auth });
+} catch (err) {
+  console.error(
+    "FATAL: Failed to configure Google Sheets auth:",
+    err.message || err
+  );
+  throw err;
+}
+
 const bot = new Telegraf(BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const model = "gemini-2.5-flash";
-
-// Sheets Auth: Replace escaped newlines with actual newlines
-const auth = new google.auth.JWT({
-  email: GOOGLE_CLIENT_EMAIL,
-  key: GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n") : "",
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-});
-const sheets = google.sheets({ version: "v4", auth });
 
 // --- Gemini Schema Definition ---
 const expenseSchema = z.object({
@@ -257,13 +289,13 @@ bot.command("download_csv", async (ctx) => {
 // This function is what Vercel executes on every incoming HTTP request (webhook)
 export default async (req, res) => {
   try {
-    // Handle the incoming webhook from Telegram
-    await bot.handleUpdate(req.body, res);
+    // Let Telegraf process the update object
+    await bot.handleUpdate(req.body);
 
     // Send a quick response back to Telegram
     res.status(200).send("OK");
   } catch (error) {
-    console.error("Vercel Webhook execution error:", error.message);
+    console.error("Vercel Webhook execution error:", error.message || error);
     res.status(500).send("Internal Server Error");
   }
 };
