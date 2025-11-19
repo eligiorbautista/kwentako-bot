@@ -14,16 +14,22 @@ dotenv.config();
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// --- FIX: Using the Vercel-generated variable name ---
+// --- FIX: Using the Vercel-generated variable name with fallbacks ---
 const BLOB_READ_WRITE_TOKEN =
-  process.env.BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN;
+  process.env.BLOB_READ_WRITE_TOKEN_READ_WRITE_TOKEN ||
+  process.env.BLOB_READ_WRITE_TOKEN ||
+  process.env.VERCEL_BLOB_READ_WRITE_TOKEN;
 
 const CREATOR_NAME = "Eli Bautista";
 const BLOB_FILE_KEY = "expenses/kwentako_data.csv";
 
-// Fail-safe check
+// Fail-safe check with detailed logging
 if (!BOT_TOKEN || !GEMINI_API_KEY || !BLOB_READ_WRITE_TOKEN) {
   console.error("FATAL: Required environment variables are missing.");
+  console.error("BOT_TOKEN:", BOT_TOKEN ? "✓ Present" : "✗ Missing");
+  console.error("GEMINI_API_KEY:", GEMINI_API_KEY ? "✓ Present" : "✗ Missing");
+  console.error("BLOB_READ_WRITE_TOKEN:", BLOB_READ_WRITE_TOKEN ? "✓ Present" : "✗ Missing");
+  console.error("Available env keys:", Object.keys(process.env).filter(key => key.includes('BLOB')));
 }
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -81,29 +87,75 @@ const simplifiedJsonSchema = {
  */
 const readBlobContent = async () => {
   try {
-    // Get the download URL for the blob
-    const downloadUrl = await getDownloadUrl(BLOB_FILE_KEY, {
+    // Method 1: List blobs and use the direct URL
+    const { blobs } = await list({
       token: BLOB_READ_WRITE_TOKEN,
+      prefix: BLOB_FILE_KEY,
     });
 
+    // If no blobs found with this key, return initial header
+    if (!blobs || blobs.length === 0) {
+      console.log("No existing blob found, returning default header");
+      return "Date,Description,Amount (PHP),Category\n";
+    }
+
+    // Get the blob URL - use the direct URL from the blob object
+    const blob = blobs[0];
+    if (!blob.url) {
+      throw new Error("Blob URL is not available");
+    }
+
+    console.log("Fetching blob content from:", blob.url);
+    
     // Fetch the content from the URL
-    const response = await fetch(downloadUrl);
+    const response = await fetch(blob.url);
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    return await response.text();
-  } catch (error) {
-    // If the file doesn't exist (404), return the initial header row
-    if (
-      error.message.includes("404") ||
-      error.message.includes("file not found") ||
-      error.message.includes("BlobNotFoundError")
-    ) {
-      return "Date,Description,Amount (PHP),Category\n";
+    const content = await response.text();
+    console.log("Successfully read blob content, length:", content.length);
+    return content;
+
+  } catch (listError) {
+    console.error("List method failed, trying getDownloadUrl:", listError.message);
+    
+    // Method 2: Fallback to getDownloadUrl
+    try {
+      const downloadUrl = await getDownloadUrl(BLOB_FILE_KEY, {
+        token: BLOB_READ_WRITE_TOKEN,
+      });
+
+      console.log("Got download URL:", downloadUrl);
+      
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const content = await response.text();
+      console.log("Successfully read blob content via downloadUrl, length:", content.length);
+      return content;
+      
+    } catch (downloadError) {
+      console.error("Both methods failed:", downloadError.message);
+      
+      // If the file doesn't exist or we can't access it, return the initial header row
+      if (
+        downloadError.message.includes("404") ||
+        downloadError.message.includes("file not found") ||
+        downloadError.message.includes("BlobNotFoundError") ||
+        downloadError.message.includes("Invalid URL") ||
+        listError.message.includes("404") ||
+        listError.message.includes("file not found")
+      ) {
+        console.log("Blob doesn't exist, returning default header");
+        return "Date,Description,Amount (PHP),Category\n";
+      }
+      
+      throw new Error(`Blob Read Error: ${downloadError.message}`);
     }
-    throw new Error(`Blob Read Error: ${error.message}`);
   }
 };
 
