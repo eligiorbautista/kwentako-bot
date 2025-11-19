@@ -577,6 +577,11 @@ bot.start(async (ctx) => {
     
 Simply send me your expenses. I will log them to secure Vercel Blob storage and send you the updated download link.
 
+📝 *Available Commands:*
+• Send expense messages (e.g., "lunch 150 pesos")
+• \`/verify\` - Check current data status
+• \`/clearData\` - Delete all stored expense data
+
 ✨ *Created by ${CREATOR_NAME}*
     `;
   ctx.replyWithMarkdown(welcomeMessage);
@@ -616,6 +621,64 @@ bot.command("verify", async (ctx) => {
     );
   } catch (error) {
     ctx.reply(`❌ Error reading blob: ${error.message}`);
+  }
+});
+
+// Add clear data command
+bot.command("clearData", async (ctx) => {
+  try {
+    await ctx.reply("🗑️ Starting to clear all expense data...");
+
+    // List all blobs with the expenses prefix
+    const { blobs } = await list({
+      token: BLOB_READ_WRITE_TOKEN,
+      prefix: "expenses/",
+    });
+
+    if (!blobs || blobs.length === 0) {
+      await ctx.reply("✅ No data found to clear. Storage is already empty.");
+      return;
+    }
+
+    let deletedCount = 0;
+    let errorCount = 0;
+
+    // Delete all found blobs
+    for (const blob of blobs) {
+      try {
+        await del(blob.pathname, { token: BLOB_READ_WRITE_TOKEN });
+        deletedCount++;
+        console.log(`Deleted blob: ${blob.pathname}`);
+      } catch (deleteError) {
+        errorCount++;
+        console.error(
+          `Failed to delete ${blob.pathname}:`,
+          deleteError.message
+        );
+      }
+    }
+
+    // Provide feedback to user
+    if (deletedCount > 0) {
+      await ctx.replyWithHTML(
+        `✅ <b>Data cleared successfully!</b>\n` +
+          `🗑️ Deleted ${deletedCount} file(s)\n` +
+          (errorCount > 0
+            ? `⚠️ Failed to delete ${errorCount} file(s)\n`
+            : "") +
+          `\n📝 You can now start fresh with new expenses.`
+      );
+    } else {
+      await ctx.reply(
+        "❌ Failed to delete any files. Please try again or contact support."
+      );
+    }
+  } catch (error) {
+    console.error("Clear data error:", error);
+    await ctx.reply(
+      `❌ Error clearing data: ${error.message}\n` +
+        `Please try again or contact support if the issue persists.`
+    );
   }
 });
 
