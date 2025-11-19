@@ -5,7 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import dotenv from "dotenv";
-import { put, getDownloadUrl, list } from "@vercel/blob";
+import { put, getDownloadUrl, list, del } from "@vercel/blob";
 
 // Load environment variables
 dotenv.config();
@@ -323,33 +323,63 @@ const readBlobContent = async () => {
  */
 const writeBlobContent = async (newContent) => {
   console.log("Writing content to blob, length:", newContent.length);
-  console.log("Content being written:", newContent);
 
-  // Create a unique filename to avoid caching issues
-  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const uniqueFilename = `expenses/kwentako_data_${timestamp}.csv`;
+  try {
+    // STEP 1: Delete existing blob if it exists
+    console.log("Attempting to delete existing blob...");
+    
+    // List existing blobs to find the target
+    const { blobs } = await list({
+      token: BLOB_READ_WRITE_TOKEN,
+      prefix: "expenses/",
+    });
+    
+    const existingBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
+    
+    if (existingBlob) {
+      console.log("Found existing blob, deleting:", existingBlob.url);
+      await del(existingBlob.url, {
+        token: BLOB_READ_WRITE_TOKEN,
+      });
+      console.log("Successfully deleted existing blob");
+      
+      // Small delay to ensure deletion is processed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    } else {
+      console.log("No existing blob found to delete");
+    }
 
-  // Write to both the main file and a timestamped backup
-  const results = await Promise.all([
-    // Main file (with overwrite)
-    put(BLOB_FILE_KEY, newContent, {
+    // STEP 2: Create new blob
+    console.log("Creating new blob...");
+    const newBlob = await put(BLOB_FILE_KEY, newContent, {
       token: BLOB_READ_WRITE_TOKEN,
       access: "public",
       contentType: "text/csv",
-      allowOverwrite: true,
-    }),
-    // Timestamped backup
-    put(uniqueFilename, newContent, {
-      token: BLOB_READ_WRITE_TOKEN,
-      access: "public",
-      contentType: "text/csv",
-    }),
-  ]);
+    });
 
-  console.log("Main file write result:", results[0]);
-  console.log("Backup file write result:", results[1]);
+    console.log("Successfully created new blob:", newBlob);
 
-  return results[0]; // Return the main file result
+    // STEP 3: Create timestamped backup
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const backupFilename = `expenses/backup_kwentako_data_${timestamp}.csv`;
+    
+    try {
+      const backupBlob = await put(backupFilename, newContent, {
+        token: BLOB_READ_WRITE_TOKEN,
+        access: "public",
+        contentType: "text/csv",
+      });
+      console.log("Created backup file:", backupBlob.url);
+    } catch (backupError) {
+      console.log("Backup creation failed (non-critical):", backupError.message);
+    }
+
+    return newBlob;
+    
+  } catch (error) {
+    console.error("Error in writeBlobContent:", error);
+    throw new Error(`Failed to write blob content: ${error.message}`);
+  }
 };
 
 /**
@@ -675,28 +705,11 @@ bot.on("text", async (ctx) => {
     const updatedContent = generateCompleteCSV(allRecords);
     console.log("Generated CSV content, length:", updatedContent.length);
 
-    // 6. WRITE UPDATED CSV BACK TO BLOB
+    // 6. WRITE UPDATED CSV BACK TO BLOB (delete-first approach)
     const blobMetadata = await writeBlobContent(updatedContent);
     console.log("Blob write result:", blobMetadata);
 
-    // 7. GET FRESH DOWNLOAD URL
-    let downloadUrl = blobMetadata.url;
-    try {
-      // Get the fresh blob listing to ensure we have the correct URL
-      const { blobs } = await list({
-        token: BLOB_READ_WRITE_TOKEN,
-        prefix: "expenses/",
-      });
-      const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
-      if (targetBlob && targetBlob.url) {
-        downloadUrl = targetBlob.url;
-        console.log("Using fresh blob URL:", downloadUrl);
-      }
-    } catch (listError) {
-      console.log("Failed to get fresh URL, using blob metadata URL:", listError.message);
-    }
-
-    // 8. CALCULATE STATISTICS FOR RESPONSE
+    // 7. CALCULATE STATISTICS FOR RESPONSE
     const newTotal = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
     const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
@@ -712,7 +725,7 @@ bot.on("text", async (ctx) => {
           allRecords.length
         } records (PHP ${grandTotal.toFixed(2)})\n` +
         `${parsingMethod}\n\n` +
-        `📥 Download CSV: <a href="${downloadUrl}">Click here</a>\n\n` +
+        `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
         `🔍 Updated: ${new Date().toISOString()}`
     );
   } catch (error) {
