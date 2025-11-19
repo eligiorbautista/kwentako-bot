@@ -245,15 +245,15 @@ const readBlobContent = async () => {
     let targetBlob = null;
     if (blobs && blobs.length > 0) {
       // Sort by upload date (most recent first)
-      const sortedBlobs = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+      const sortedBlobs = blobs.sort(
+        (a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)
+      );
       targetBlob = sortedBlobs[0]; // Get the most recent one
     }
 
     // If no blob found, return initial CSV with metadata
     if (!targetBlob) {
-      console.log(
-        "No existing blob found, returning default CSV"
-      );
+      console.log("No existing blob found, returning default CSV");
       return generateInitialCSV();
     }
 
@@ -333,9 +333,9 @@ const writeBlobContent = async (newContent) => {
     // SOLUTION: Use unique filename each time to guarantee fresh URL
     const timestamp = Date.now();
     const uniqueFilename = `expenses/kwentako_data_${timestamp}.csv`;
-    
+
     console.log("Creating blob with unique filename:", uniqueFilename);
-    
+
     const newBlob = await put(uniqueFilename, newContent, {
       token: BLOB_READ_WRITE_TOKEN,
       access: "public",
@@ -344,7 +344,7 @@ const writeBlobContent = async (newContent) => {
 
     console.log("Successfully created new blob:", {
       url: newBlob.url,
-      pathname: newBlob.pathname
+      pathname: newBlob.pathname,
     });
 
     // Optional: Clean up old files (keep last 5)
@@ -353,23 +353,32 @@ const writeBlobContent = async (newContent) => {
         token: BLOB_READ_WRITE_TOKEN,
         prefix: "expenses/kwentako_data_",
       });
-      
+
       if (blobs && blobs.length > 5) {
         // Sort by upload date and keep only the newest 5
-        const sortedBlobs = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+        const sortedBlobs = blobs.sort(
+          (a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)
+        );
         const blobsToDelete = sortedBlobs.slice(5); // Delete older ones
-        
+
         for (const oldBlob of blobsToDelete) {
           try {
             await del(oldBlob.pathname, { token: BLOB_READ_WRITE_TOKEN });
             console.log("Cleaned up old blob:", oldBlob.pathname);
           } catch (cleanupError) {
-            console.log("Cleanup failed for:", oldBlob.pathname, cleanupError.message);
+            console.log(
+              "Cleanup failed for:",
+              oldBlob.pathname,
+              cleanupError.message
+            );
           }
         }
       }
     } catch (cleanupError) {
-      console.log("Cleanup process failed (non-critical):", cleanupError.message);
+      console.log(
+        "Cleanup process failed (non-critical):",
+        cleanupError.message
+      );
     }
 
     return newBlob;
@@ -586,11 +595,13 @@ bot.command("verify", async (ctx) => {
       token: BLOB_READ_WRITE_TOKEN,
       prefix: "expenses/kwentako_data_",
     });
-    
+
     let downloadUrl = "#";
     if (blobs && blobs.length > 0) {
       // Get the most recent blob
-      const sortedBlobs = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+      const sortedBlobs = blobs.sort(
+        (a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt)
+      );
       downloadUrl = sortedBlobs[0].url;
     }
 
@@ -715,9 +726,16 @@ bot.on("text", async (ctx) => {
     const newTotal = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
     const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
-    const parsingMethod = isManualParsing
-      ? "📝 Manual parsing used (AI overloaded)"
-      : "🤖 AI parsing";
+    // Format datetime in human-readable English
+    const updateTime = new Date().toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'Asia/Manila'
+    });
 
     await ctx.replyWithHTML(
       `✅ Added ${newRecords.length} new expenses (PHP ${newTotal.toFixed(
@@ -725,10 +743,9 @@ bot.on("text", async (ctx) => {
       )})\n` +
         `📊 Total expenses: ${
           allRecords.length
-        } records (PHP ${grandTotal.toFixed(2)})\n` +
-        `${parsingMethod}\n\n` +
+        } records (PHP ${grandTotal.toFixed(2)})\n\n` +
         `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
-        `🔍 Updated: ${new Date().toISOString()}`
+        `🔍 Updated: ${updateTime}`
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
