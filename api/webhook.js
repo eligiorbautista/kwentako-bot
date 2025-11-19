@@ -169,6 +169,7 @@ const writeBlobContent = async (newContent) => {
     token: BLOB_READ_WRITE_TOKEN, // Uses the correctly mapped token
     access: "public",
     contentType: "text/csv",
+    allowOverwrite: true, // Allow overwriting existing blob
   });
 };
 
@@ -305,8 +306,8 @@ bot.on("text", async (ctx) => {
     const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
     await ctx.replyWithHTML(
-      `✅ Saved ${newRecords.length} items. Total: ₱${total.toFixed(2)}` +
-        `\n\n📥 **Download CSV:** <a href="${blobMetadata.url}">Click to get file</a>`
+      `✅ Saved ${newRecords.length} items. Total: ₱${total.toFixed(2)}\n\n` +
+      `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>`
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
