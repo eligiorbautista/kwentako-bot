@@ -7,23 +7,17 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import dotenv from "dotenv";
 
-// Load environment variables locally (Vercel loads them automatically)
+// Load environment variables locally
 dotenv.config();
 
 // --- CONFIGURATION ---
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const CREATOR_NAME = "Eli Bautista";
-
-// --- GOOGLE SHEETS CONFIG ---
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_NAME = process.env.SHEET_NAME || "Expenses";
-const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
-const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
 const BASE64_CREDENTIALS = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64; // The robust key
 
 // -------------------------------------------------------------------
-// 1. Client Setup & Authentication (CRITICAL FIX IMPLEMENTED HERE)
+// 1. Client Setup & Authentication (FINAL ROBUST METHOD)
 // -------------------------------------------------------------------
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -32,35 +26,23 @@ const model = "gemini-2.5-flash";
 
 let sheets;
 let authError = null;
-let credentials = {};
-let privateKeyFormatted = "";
 
 try {
-  // 1. Prioritize the robust BASE64 key
-  if (BASE64_CREDENTIALS) {
-    // Decode the entire JSON file contents
-    const decodedCredentialsString = Buffer.from(
-      BASE64_CREDENTIALS,
-      "base64"
-    ).toString("utf-8");
-    credentials = JSON.parse(decodedCredentialsString);
-    console.log("--- AUTH: Using Base64 Credentials (Robust Method) ---");
-  } else {
-    // Fallback: If Base64 is missing, use the raw key string (THIS IS THE FAILING PATH)
-    console.log(
-      "--- AUTH: Falling back to Raw Key Method (Expect OpenSSL Error) ---"
+  if (!BASE64_CREDENTIALS) {
+    throw new Error(
+      "FATAL: GOOGLE_SERVICE_ACCOUNT_BASE64 variable is missing."
     );
-
-    // Clean and format the raw key for the temporary fallback attempt
-    const rawKey = GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY : "";
-    privateKeyFormatted = rawKey.trim().replace(/\\n/g, "\n");
-
-    credentials.client_email = GOOGLE_CLIENT_EMAIL;
-    credentials.private_key = privateKeyFormatted;
   }
 
-  // 2. Initialize JWT Client
-  auth = new google.auth.JWT({
+  // 1. Decode the Base64 string into a credential object
+  const decodedCredentialsString = Buffer.from(
+    BASE64_CREDENTIALS,
+    "base64"
+  ).toString("utf-8");
+  const credentials = JSON.parse(decodedCredentialsString);
+
+  // 2. Initialize JWT Client (uses credentials.client_email and credentials.private_key)
+  const auth = new google.auth.JWT({
     email: credentials.client_email,
     key: credentials.private_key,
     scopes: ["https://www.googleapis.com/auth/spreadsheets"],
@@ -68,13 +50,11 @@ try {
 
   // 3. Initialize Sheets Client
   sheets = google.sheets({ version: "v4", auth });
+  console.log("--- AUTH SUCCESS: Sheets Client Initialized ---");
 } catch (error) {
-  // Store the error for later use in user response and logs
   authError = error;
-  console.error(
-    "FATAL AUTH ERROR: Key failed to decode/authenticate.",
-    error.message
-  );
+  console.error("FATAL AUTH ERROR:", error.message);
+  // Set sheets to null to ensure subsequent API calls are blocked
   sheets = null;
 }
 
@@ -83,12 +63,12 @@ console.log("--- ENV CHECK START ---");
 console.log(`SHEET ID: ${SPREADSHEET_ID}`);
 console.log(`Auth Status: ${sheets ? "Initialized" : "FAILED"}`);
 console.log(
-  `Base64 Variable Status: ${BASE64_CREDENTIALS ? "PRESENT" : "MISSING"}`
+  `Auth Error Type: ${authError ? authError.constructor.name : "N/A"}`
 );
 console.log("--- ENV CHECK END ---");
 // -----------------------------
 
-// --- Gemini Schema Definition ---
+// --- Gemini Schema Definition (Rest of the code remains the same) ---
 const expenseSchema = z.object({
   description: z
     .string()
@@ -112,9 +92,8 @@ const jsonSchema = zodToJsonSchema(responseSchema);
 // 2. Google Sheets Functions
 // -------------------------------------------------------------------
 
-/**
- * Uses Gemini to parse Philippine expense text into structured JSON data.
- */
+// ... parseExpensesWithAI (same) ...
+
 const parseExpensesWithAI = async (text) => {
   const prompt = `You are an expert financial assistant operating in the Philippines. Analyze the following user input and extract all separate expenses. Assume all currency is in Philippine Peso (PHP) unless otherwise specified. Input: "${text}"`;
 
@@ -141,9 +120,7 @@ const appendRecordsToSheet = async (records) => {
   // Check for authentication failure before proceeding
   if (!sheets) {
     throw new Error(
-      authError
-        ? authError.message
-        : "Authentication failed during initialization."
+      "FATAL: Google Sheets client failed to initialize due to credential error."
     );
   }
 
@@ -156,7 +133,7 @@ const appendRecordsToSheet = async (records) => {
 
   await sheets.spreadsheets.values.append({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:D`,
+    range: `${process.env.SHEET_NAME || "Expenses"}!A:D`,
     valueInputOption: "USER_ENTERED",
     resource: {
       values: rows,
@@ -164,22 +141,19 @@ const appendRecordsToSheet = async (records) => {
   });
 };
 
-/**
- * Fetches all data from the sheet and calculates statistics.
- */
+// ... (getStatsFromSheet and all other logic remains the same) ...
+
 const getStatsFromSheet = async () => {
   // Check for authentication failure before proceeding
   if (!sheets) {
     throw new Error(
-      authError
-        ? authError.message
-        : "Authentication failed during initialization."
+      "FATAL: Google Sheets client failed to initialize due to credential error."
     );
   }
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
-    range: `${SHEET_NAME}!A:D`,
+    range: `${process.env.SHEET_NAME || "Expenses"}!A:D`,
   });
 
   const rows = response.data.values ? response.data.values.slice(1) : [];
@@ -224,13 +198,14 @@ const getStatsFromSheet = async () => {
 **Category Breakdown:**${categoryBreakdown}
 
 📁 **Data Source:** Google Sheet
-* **Created by:** ${CREATOR_NAME}
+* **Created by:** ${process.env.CREATOR_NAME || "Eli Bautista"}
     `;
 
   return { summary };
 };
+
 // -------------------------------------------------------------------
-// 3. Bot Commands and Handlers
+// 3. Bot Commands and Handlers (Error handling updated)
 // -------------------------------------------------------------------
 
 bot.start(async (ctx) => {
@@ -239,7 +214,7 @@ bot.start(async (ctx) => {
     
 Simply send me your expenses, and **Gemini AI** will log them into your Google Sheet. Currency is assumed to be **Philippine Peso (₱)**.
 
-✨ *Created by ${CREATOR_NAME}*
+✨ *Created by ${process.env.CREATOR_NAME || "Eli Bautista"}*
     `;
   ctx.replyWithMarkdown(welcomeMessage);
 });
@@ -249,7 +224,7 @@ bot.help(async (ctx) => {
 📚 **Available Commands:**
 * \`/download_csv\`: Sends you the latest statistics and a download link.
 
-Bot created by **${CREATOR_NAME}**.
+Bot created by **${process.env.CREATOR_NAME || "Eli Bautista"}**.
     `;
   ctx.replyWithMarkdown(helpMessage);
 });
@@ -258,6 +233,13 @@ Bot created by **${CREATOR_NAME}**.
 bot.on("text", async (ctx) => {
   const text = ctx.message.text;
   if (text.startsWith("/")) return;
+
+  // Check for authentication failure first
+  if (!sheets) {
+    return ctx.reply(
+      "Critical Error: Authentication failed. Please check Vercel logs and ensure the BASE64 key is correct."
+    );
+  }
 
   try {
     await ctx.reply("🤖 Analyzing expense with Gemini AI...");
@@ -270,7 +252,6 @@ bot.on("text", async (ctx) => {
       );
     }
 
-    // --- WRITE TO GOOGLE SHEETS ---
     await appendRecordsToSheet(newRecords);
 
     const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
@@ -280,18 +261,24 @@ bot.on("text", async (ctx) => {
       } items to Google Sheet. Total: ₱${total.toFixed(2)}`
     );
   } catch (error) {
-    // Log the full error object to Vercel logs for inspection
+    // We log the full error for debugging
     console.error("Error processing with Sheets:", error);
 
-    // Reply to the user with the authentication message
+    // This is the common 403/404/Sheet-related error response
     ctx.reply(
-      "Error saving data. If this persists, the Google Sheet credentials (Private Key or Sharing Permissions) are incorrect."
+      "Error saving data. Check your Google Sheet ID, sharing Permissions, or Vercel logs."
     );
   }
 });
 
 // Command to download the data
 bot.command("download_csv", async (ctx) => {
+  // Check for authentication failure first
+  if (!sheets) {
+    return ctx.reply(
+      "Critical Error: Authentication failed. Please check Vercel logs and ensure the BASE64 key is correct."
+    );
+  }
   try {
     const { summary } = await getStatsFromSheet();
 
@@ -319,18 +306,14 @@ bot.command("download_csv", async (ctx) => {
 
 export default async (req, res) => {
   try {
-    // Handle the incoming webhook from Telegram
     await bot.handleUpdate(req.body, res);
 
-    // Send 200 OK ONLY if the response hasn't been sent by ctx.reply inside the handlers
     if (!res.headersSent) {
       res.status(200).send("OK");
     }
   } catch (error) {
-    // Log the execution error (usually occurs if the request structure is bad)
     console.error("Vercel Webhook execution error:", error.message);
 
-    // Ensure we only send a 500 status if no reply was sent via Telegram
     if (!res.headersSent) {
       res.status(500).send("Internal Server Error");
     }
