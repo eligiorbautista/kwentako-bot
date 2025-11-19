@@ -230,10 +230,10 @@ const parseExistingCSV = (csvContent) => {
  */
 const readBlobContent = async () => {
   try {
-    // Method 1: List blobs and find the exact match
+    // Method 1: List blobs and find the most recent one
     const { blobs } = await list({
       token: BLOB_READ_WRITE_TOKEN,
-      prefix: "expenses/", // Use folder prefix instead of exact file
+      prefix: "expenses/kwentako_data_", // Look for our timestamped files
     });
 
     console.log(
@@ -241,18 +241,23 @@ const readBlobContent = async () => {
       blobs?.map((b) => ({ pathname: b.pathname, uploadedAt: b.uploadedAt }))
     );
 
-    // Find the exact file we want
-    const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
+    // Find the most recent blob (highest timestamp)
+    let targetBlob = null;
+    if (blobs && blobs.length > 0) {
+      // Sort by upload date (most recent first)
+      const sortedBlobs = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+      targetBlob = sortedBlobs[0]; // Get the most recent one
+    }
 
-    // If no blob found with this key, return initial CSV with metadata
+    // If no blob found, return initial CSV with metadata
     if (!targetBlob) {
       console.log(
-        "No existing blob found with exact pathname, returning default CSV"
+        "No existing blob found, returning default CSV"
       );
       return generateInitialCSV();
     }
 
-    console.log("Found target blob:", {
+    console.log("Found most recent blob:", {
       pathname: targetBlob.pathname,
       url: targetBlob.url,
       uploadedAt: targetBlob.uploadedAt,
@@ -325,57 +330,49 @@ const writeBlobContent = async (newContent) => {
   console.log("Writing content to blob, length:", newContent.length);
 
   try {
-    // STEP 1: Delete existing blob if it exists
-    console.log("Attempting to delete existing blob...");
+    // SOLUTION: Use unique filename each time to guarantee fresh URL
+    const timestamp = Date.now();
+    const uniqueFilename = `expenses/kwentako_data_${timestamp}.csv`;
     
-    // List existing blobs to find the target
-    const { blobs } = await list({
-      token: BLOB_READ_WRITE_TOKEN,
-      prefix: "expenses/",
-    });
+    console.log("Creating blob with unique filename:", uniqueFilename);
     
-    const existingBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
-    
-    if (existingBlob) {
-      console.log("Found existing blob, deleting:", existingBlob.url);
-      await del(existingBlob.url, {
-        token: BLOB_READ_WRITE_TOKEN,
-      });
-      console.log("Successfully deleted existing blob");
-      
-      // Small delay to ensure deletion is processed
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } else {
-      console.log("No existing blob found to delete");
-    }
-
-    // STEP 2: Create new blob
-    console.log("Creating new blob...");
-    const newBlob = await put(BLOB_FILE_KEY, newContent, {
+    const newBlob = await put(uniqueFilename, newContent, {
       token: BLOB_READ_WRITE_TOKEN,
       access: "public",
       contentType: "text/csv",
     });
 
-    console.log("Successfully created new blob:", newBlob);
+    console.log("Successfully created new blob:", {
+      url: newBlob.url,
+      pathname: newBlob.pathname
+    });
 
-    // STEP 3: Create timestamped backup
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const backupFilename = `expenses/backup_kwentako_data_${timestamp}.csv`;
-    
+    // Optional: Clean up old files (keep last 5)
     try {
-      const backupBlob = await put(backupFilename, newContent, {
+      const { blobs } = await list({
         token: BLOB_READ_WRITE_TOKEN,
-        access: "public",
-        contentType: "text/csv",
+        prefix: "expenses/kwentako_data_",
       });
-      console.log("Created backup file:", backupBlob.url);
-    } catch (backupError) {
-      console.log("Backup creation failed (non-critical):", backupError.message);
+      
+      if (blobs && blobs.length > 5) {
+        // Sort by upload date and keep only the newest 5
+        const sortedBlobs = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+        const blobsToDelete = sortedBlobs.slice(5); // Delete older ones
+        
+        for (const oldBlob of blobsToDelete) {
+          try {
+            await del(oldBlob.pathname, { token: BLOB_READ_WRITE_TOKEN });
+            console.log("Cleaned up old blob:", oldBlob.pathname);
+          } catch (cleanupError) {
+            console.log("Cleanup failed for:", oldBlob.pathname, cleanupError.message);
+          }
+        }
+      }
+    } catch (cleanupError) {
+      console.log("Cleanup process failed (non-critical):", cleanupError.message);
     }
 
     return newBlob;
-    
   } catch (error) {
     console.error("Error in writeBlobContent:", error);
     throw new Error(`Failed to write blob content: ${error.message}`);
@@ -587,10 +584,15 @@ bot.command("verify", async (ctx) => {
     // Get the current blob URL dynamically
     const { blobs } = await list({
       token: BLOB_READ_WRITE_TOKEN,
-      prefix: "expenses/",
+      prefix: "expenses/kwentako_data_",
     });
-    const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
-    const downloadUrl = targetBlob ? targetBlob.url : "#";
+    
+    let downloadUrl = "#";
+    if (blobs && blobs.length > 0) {
+      // Get the most recent blob
+      const sortedBlobs = blobs.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+      downloadUrl = sortedBlobs[0].url;
+    }
 
     await ctx.replyWithHTML(
       `🔍 <b>Current CSV Status:</b>\n` +
