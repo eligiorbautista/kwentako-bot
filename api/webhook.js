@@ -279,15 +279,23 @@ bot.command("download_csv", async (ctx) => {
 // 5. Vercel Handler Function (The Webhook Entry Point)
 // -------------------------------------------------------------------
 
+// --- FIX: Telegraf handles the response, so we don't send a second one ---
 export default async (req, res) => {
-  // This check is a final failsafe, though Vercel should be running the setup above
-  if (!BOT_TOKEN) return res.status(500).send("Configuration Error");
-
   try {
+    // Handle the incoming webhook from Telegram
     await bot.handleUpdate(req.body, res);
-    res.status(200).send("OK");
+
+    // Vercel only needs the 200 OK signal, which Telegraf often handles implicitly.
+    // We will send it manually IF Telegraf hasn't already crashed or responded.
+    // We MUST check if headers have been sent before sending the final status.
+    if (!res.headersSent) {
+      res.status(200).send("OK");
+    }
   } catch (error) {
     console.error("Vercel Webhook execution error:", error.message);
-    res.status(500).send("Internal Server Error");
+    // Ensure we only send an error if we haven't already replied via Telegram
+    if (!res.headersSent) {
+      res.status(500).send("Internal Server Error");
+    }
   }
 };
