@@ -28,8 +28,14 @@ if (!BOT_TOKEN || !GEMINI_API_KEY || !BLOB_READ_WRITE_TOKEN) {
   console.error("FATAL: Required environment variables are missing.");
   console.error("BOT_TOKEN:", BOT_TOKEN ? "✓ Present" : "✗ Missing");
   console.error("GEMINI_API_KEY:", GEMINI_API_KEY ? "✓ Present" : "✗ Missing");
-  console.error("BLOB_READ_WRITE_TOKEN:", BLOB_READ_WRITE_TOKEN ? "✓ Present" : "✗ Missing");
-  console.error("Available env keys:", Object.keys(process.env).filter(key => key.includes('BLOB')));
+  console.error(
+    "BLOB_READ_WRITE_TOKEN:",
+    BLOB_READ_WRITE_TOKEN ? "✓ Present" : "✗ Missing"
+  );
+  console.error(
+    "Available env keys:",
+    Object.keys(process.env).filter((key) => key.includes("BLOB"))
+  );
 }
 
 const bot = new Telegraf(BOT_TOKEN);
@@ -87,28 +93,31 @@ const simplifiedJsonSchema = {
  */
 const readBlobContent = async () => {
   try {
-    // Method 1: List blobs and use the direct URL
+    // Method 1: List blobs and find the exact match
     const { blobs } = await list({
       token: BLOB_READ_WRITE_TOKEN,
-      prefix: BLOB_FILE_KEY,
+      prefix: "expenses/", // Use folder prefix instead of exact file
     });
 
-    // If no blobs found with this key, return initial header
-    if (!blobs || blobs.length === 0) {
-      console.log("No existing blob found, returning default header");
+    console.log("Listed blobs:", blobs?.map(b => ({pathname: b.pathname, uploadedAt: b.uploadedAt})));
+
+    // Find the exact file we want
+    const targetBlob = blobs?.find(blob => blob.pathname === BLOB_FILE_KEY);
+
+    // If no blob found with this key, return initial header
+    if (!targetBlob) {
+      console.log("No existing blob found with exact pathname, returning default header");
       return "Date,Description,Amount (PHP),Category\n";
     }
 
-    // Get the blob URL - use the direct URL from the blob object
-    const blob = blobs[0];
-    if (!blob.url) {
-      throw new Error("Blob URL is not available");
-    }
+    console.log("Found target blob:", {
+      pathname: targetBlob.pathname,
+      url: targetBlob.url,
+      uploadedAt: targetBlob.uploadedAt
+    });
 
-    console.log("Fetching blob content from:", blob.url);
-    
-    // Fetch the content from the URL
-    const response = await fetch(blob.url);
+    // Fetch the content from the URL with cache-busting
+    const response = await fetch(targetBlob.url + "?t=" + Date.now());
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -116,11 +125,14 @@ const readBlobContent = async () => {
 
     const content = await response.text();
     console.log("Successfully read blob content, length:", content.length);
+    console.log("Content preview:", content.substring(0, 200) + "...");
     return content;
-
   } catch (listError) {
-    console.error("List method failed, trying getDownloadUrl:", listError.message);
-    
+    console.error(
+      "List method failed, trying getDownloadUrl:",
+      listError.message
+    );
+
     // Method 2: Fallback to getDownloadUrl
     try {
       const downloadUrl = await getDownloadUrl(BLOB_FILE_KEY, {
@@ -128,19 +140,22 @@ const readBlobContent = async () => {
       });
 
       console.log("Got download URL:", downloadUrl);
-      
-      const response = await fetch(downloadUrl);
+
+      // Add cache-busting parameter
+      const response = await fetch(downloadUrl + "?t=" + Date.now());
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const content = await response.text();
-      console.log("Successfully read blob content via downloadUrl, length:", content.length);
+      console.log(
+        "Successfully read blob content via downloadUrl, length:",
+        content.length
+      );
       return content;
-      
     } catch (downloadError) {
       console.error("Both methods failed:", downloadError.message);
-      
+
       // If the file doesn't exist or we can't access it, return the initial header row
       if (
         downloadError.message.includes("404") ||
@@ -153,7 +168,7 @@ const readBlobContent = async () => {
         console.log("Blob doesn't exist, returning default header");
         return "Date,Description,Amount (PHP),Category\n";
       }
-      
+
       throw new Error(`Blob Read Error: ${downloadError.message}`);
     }
   }
@@ -283,6 +298,7 @@ bot.on("text", async (ctx) => {
 
     // 2. READ EXISTING BLOB DATA
     const existingContent = await readBlobContent();
+    console.log("Existing content read:", existingContent);
 
     // 3. Extract existing data lines (skip header)
     const contentLines = existingContent.split("\n");
@@ -290,24 +306,31 @@ bot.on("text", async (ctx) => {
     const existingData = contentLines
       .slice(1)
       .filter((line) => line.trim() !== "");
+    
+    console.log("Existing data lines:", existingData);
 
     // 4. FORMAT AND COMBINE NEW DATA
     const newCsvLines = newRecords.map(
       (r) => `${r.date},"${r.description}",${r.amount},${r.category}`
     );
+    
+    console.log("New CSV lines to add:", newCsvLines);
 
     const allData = [...existingData, ...newCsvLines];
-    const updatedContent = [header, ...allData].join("\n");
+    const updatedContent = [header, ...allData].join("\n") + "\n"; // Add final newline
+    
+    console.log("Final content to write:", updatedContent);
 
     // 5. WRITE UPDATED CSV BACK TO BLOB
     const blobMetadata = await writeBlobContent(updatedContent);
+    console.log("Blob write result:", blobMetadata);
 
     // 6. CONFIRMATION AND DOWNLOAD LINK
     const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
     await ctx.replyWithHTML(
       `✅ Saved ${newRecords.length} items. Total: ₱${total.toFixed(2)}\n\n` +
-      `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>`
+        `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>`
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
