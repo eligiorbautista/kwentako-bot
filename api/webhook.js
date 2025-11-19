@@ -102,20 +102,20 @@ const generateInitialCSV = () => {
   const now = new Date();
   const timestamp = now.toISOString();
 
-  return `# KwentaKo Expense Tracker by Eli Bautista
-# Generated: ${timestamp} 
-# Total Expenses: PHP 0.00
-# Total Records: 0
-#
-# CATEGORY BREAKDOWN:
-Date,Description,Amount (PHP),Category
-# Food: PHP 0.00 (0%)
-# Transportation: PHP 0.00 (0%)
-# Supplies: PHP 0.00 (0%)
-# Utilities: PHP 0.00 (0%)
-# Personal: PHP 0.00 (0%)
-# Other: PHP 0.00 (0%)
-#
+  return `𝗞𝘄𝗲𝗻𝘁𝗮𝗞𝗼 𝗘𝘅𝗽𝗲𝗻𝘀𝗲 𝗧𝗿𝗮𝗰𝗸𝗲𝗿 𝗯𝘆 𝗘𝗹𝗶 𝗕𝗮𝘂𝘁𝗶𝘀𝘁𝗮
+𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲𝗱: ${timestamp} 
+𝗧𝗼𝘁𝗮𝗹 𝗘𝘅𝗽𝗲𝗻𝘀𝗲𝘀: PHP 0.00
+𝗧𝗼𝘁𝗮𝗹 𝗥𝗲𝗰𝗼𝗿𝗱𝘀: 0
+
+𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗬 𝗕𝗥𝗘𝗔𝗞𝗗𝗢𝗪𝗡:
+𝗗𝗮𝘁𝗲,𝗗𝗲𝘀𝗰𝗿𝗶𝗽𝘁𝗶𝗼𝗻,𝗔𝗺𝗼𝘂𝗻𝘁,𝗖𝗮𝘁𝗲𝗴𝗼𝗿𝘆
+𝗙𝗼𝗼𝗱: PHP 0.00 (0%)
+𝗧𝗿𝗮𝗻𝘀𝗽𝗼𝗿𝘁𝗮𝘁𝗶𝗼𝗻: PHP 0.00 (0%)
+𝗦𝘂𝗽𝗽𝗹𝗶𝗲𝘀: PHP 0.00 (0%)
+𝗨𝘁𝗶𝗹𝗶𝘁𝗶𝗲𝘀: PHP 0.00 (0%)
+𝗣𝗲𝗿𝘀𝗼𝗻𝗮𝗹: PHP 0.00 (0%)
+𝗢𝘁𝗵𝗲𝗿: PHP 0.00 (0%)
+
 `;
 };
 
@@ -130,12 +130,12 @@ const generateCompleteCSV = (expenseRecords) => {
   const total = expenseRecords.reduce((sum, record) => sum + record.amount, 0);
   const categoryTotals = {};
   const categories = [
-    "Food",
-    "Transportation",
-    "Supplies",
-    "Utilities",
-    "Personal",
-    "Other",
+    "𝗙𝗼𝗼𝗱",
+    "𝗧𝗿𝗮𝗻𝘀𝗽𝗼𝗿𝘁𝗮𝘁𝗶𝗼𝗻",
+    "𝗦𝘂𝗽𝗽𝗹𝗶𝗲𝘀",
+    "𝗨𝘁𝗶𝗹𝗶𝘁𝗶𝗲𝘀",
+    "𝗣𝗲𝗿𝘀𝗼𝗻𝗮𝗹",
+    "𝗢𝘁𝗵𝗲𝗿",
   ];
 
   // Initialize categories
@@ -153,21 +153,20 @@ const generateCompleteCSV = (expenseRecords) => {
       const amount = categoryTotals[cat] || 0;
       const percentage =
         total > 0 ? ((amount / total) * 100).toFixed(1) : "0.0";
-      return `# ${cat}: PHP ${amount.toFixed(2)} (${percentage}%)`;
+      return `# ${cat}: 𝗣𝗛𝗣 ${amount.toFixed(2)} (${percentage}%)`;
     })
     .join("\n");
 
   // Generate CSV header with metadata
-  const header = `# KwentaKo Expense Tracker
-# Generated: ${timestamp}
-# Creator: ${CREATOR_NAME}
-# Total Expenses: PHP ${total.toFixed(2)}
-# Total Records: ${expenseRecords.length}
-#
-# CATEGORY BREAKDOWN:
+  const header = `𝗞𝘄𝗲𝗻𝘁𝗮𝗞𝗼 𝗘𝘅𝗽𝗲𝗻𝘀𝗲 𝗧𝗿𝗮𝗰𝗸𝗲𝗿 𝗯𝘆 𝗘𝗹𝗶 𝗕𝗮𝘂𝘁𝗶𝘀𝘁𝗮
+𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲𝗱: ${timestamp}
+𝗧𝗼𝘁𝗮𝗹 𝗘𝘅𝗽𝗲𝗻𝘀𝗲𝘀: PHP ${total.toFixed(2)}
+𝗧𝗼𝘁𝗮𝗹 𝗥𝗲𝗰𝗼𝗿𝗱𝘀: ${expenseRecords.length}
+
+𝗖𝗔𝗧𝗘𝗚𝗢𝗥𝗬 𝗕𝗥𝗘𝗔𝗞𝗗𝗢𝗪𝗡:
 ${categoryBreakdown}
-#
-Date,Description,Amount (PHP),Category`;
+
+𝗗𝗮𝘁𝗲,𝗗𝗲𝘀𝗰𝗿𝗶𝗽𝘁𝗶𝗼𝗻,𝗔𝗺𝗼𝘂𝗻𝘁,𝗖𝗮𝘁𝗲𝗴𝗼𝗿𝘆`;
 
   // Generate data rows
   const dataRows = expenseRecords.map(
@@ -196,7 +195,7 @@ const parseExistingCSV = (csvContent) => {
     }
 
     // Check if we've reached the header row
-    if (trimmedLine.startsWith("Date,Description,Amount")) {
+    if (trimmedLine.startsWith("𝗗𝗮𝘁𝗲,𝗗𝗲𝘀𝗰𝗿𝗶𝗽𝘁𝗶𝗼𝗻,𝗔𝗺𝗼𝘂𝗻𝘁")) {
       inDataSection = true;
       continue;
     }
@@ -727,14 +726,14 @@ bot.on("text", async (ctx) => {
     const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
     // Format datetime in human-readable English
-    const updateTime = new Date().toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    const updateTime = new Date().toLocaleString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
       hour12: true,
-      timeZone: 'Asia/Manila'
+      timeZone: "Asia/Manila",
     });
 
     await ctx.replyWithHTML(
