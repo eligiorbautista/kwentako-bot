@@ -28,14 +28,12 @@ if (!BOT_TOKEN || !GEMINI_API_KEY || !BLOB_READ_WRITE_TOKEN) {
 
 const bot = new Telegraf(BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-const model = "gemini-2.5-flash";
+const model = "gemini-1.5-flash"; // Lighter model, sufficient for expense parsing
 
-// --- Gemini Schema Definition ---
+// --- Simplified Schema for Better Performance ---
 const expenseSchema = z.object({
-  description: z
-    .string()
-    .describe("A brief description of the expense item..."),
-  amount: z.number().describe("The numerical value of the expense..."),
+  description: z.string().describe("Brief expense description"),
+  amount: z.number().describe("Amount in PHP"),
   category: z
     .enum([
       "Food",
@@ -45,10 +43,33 @@ const expenseSchema = z.object({
       "Personal",
       "Other",
     ])
-    .describe("The assigned expense category."),
+    .describe("Expense category"),
 });
 const responseSchema = z.array(expenseSchema);
-const jsonSchema = zodToJsonSchema(responseSchema);
+
+// Create a simpler, more efficient schema
+const simplifiedJsonSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      description: { type: "string" },
+      amount: { type: "number" },
+      category: {
+        type: "string",
+        enum: [
+          "Food",
+          "Transportation",
+          "Supplies",
+          "Utilities",
+          "Personal",
+          "Other",
+        ],
+      },
+    },
+    required: ["description", "amount", "category"],
+  },
+};
 
 // -------------------------------------------------------------------
 // 3. VERCEL BLOB & GEMINI HELPERS
@@ -100,25 +121,66 @@ const writeBlobContent = async (newContent) => {
 };
 
 /**
- * Uses Gemini to parse Philippine expense text into structured JSON data.
+ * Uses Gemini to parse Philippine expense text into structured JSON data with retry logic.
  */
-const parseExpensesWithAI = async (text) => {
-  const prompt = `You are an expert financial assistant operating in the Philippines. Analyze the following user input and extract all separate expenses. Assume all currency is in Philippine Peso (PHP) unless otherwise specified. Input: "${text}"`;
+const parseExpensesWithAI = async (text, maxRetries = 3) => {
+  // Input validation to reduce API load
+  if (!text || text.trim().length === 0) {
+    throw new Error("Empty input text");
+  }
 
-  const response = await ai.models.generateContent({
-    model: model,
-    contents: prompt,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: jsonSchema,
-    },
-  });
+  // Limit input length to prevent excessive token usage
+  const maxLength = 500;
+  const trimmedText =
+    text.length > maxLength ? text.substring(0, maxLength) + "..." : text;
 
-  const rawJson = response.text.trim();
-  const parsedData = JSON.parse(rawJson);
-  const date = new Date().toLocaleDateString("en-PH");
+  // Shorter, more efficient prompt
+  const prompt = `Extract expenses from this Philippine text. Return JSON array with description, amount (PHP), and category (Food/Transportation/Supplies/Utilities/Personal/Other):
 
-  return parsedData.map((record) => ({ ...record, date }));
+"${trimmedText}"`;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: model,
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: simplifiedJsonSchema, // Using the lighter schema
+        },
+      });
+
+      const rawJson = response.text.trim();
+      const parsedData = JSON.parse(rawJson);
+      const date = new Date().toLocaleDateString("en-PH");
+
+      return parsedData.map((record) => ({ ...record, date }));
+    } catch (error) {
+      console.log(
+        `Gemini API attempt ${attempt}/${maxRetries} failed:`,
+        error.message
+      );
+
+      // Check if it's a service unavailable error (503) or rate limit
+      if (
+        error.message.includes("503") ||
+        error.message.includes("overloaded") ||
+        error.message.includes("UNAVAILABLE") ||
+        error.message.includes("rate limit")
+      ) {
+        if (attempt < maxRetries) {
+          // Exponential backoff: wait 2^attempt seconds
+          const waitTime = Math.pow(2, attempt) * 1000;
+          console.log(`Waiting ${waitTime}ms before retry...`);
+          await new Promise((resolve) => setTimeout(resolve, waitTime));
+          continue;
+        }
+      }
+
+      // If it's not a retryable error or we've exhausted retries, throw the error
+      throw error;
+    }
+  }
 };
 
 // -------------------------------------------------------------------
@@ -141,13 +203,29 @@ bot.on("text", async (ctx) => {
   const text = ctx.message.text;
   if (text.startsWith("/")) return;
 
+  // Basic input validation to reduce unnecessary API calls
+  if (!text || text.trim().length < 3) {
+    return ctx.reply("Please provide more details about your expense.");
+  }
+
+  // Check for obvious non-expense messages
+  const nonExpensePatterns =
+    /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|what|how|why)$/i;
+  if (nonExpensePatterns.test(text.trim())) {
+    return ctx.reply(
+      "I help track expenses. Please send me details like 'bought lunch 150 pesos' or 'taxi fare 80 php'."
+    );
+  }
+
   try {
     await ctx.reply("🤖 Analyzing expense with Gemini AI...");
 
     // 1. PARSE NEW EXPENSES
     const newRecords = await parseExpensesWithAI(text);
     if (newRecords.length === 0) {
-      return ctx.reply("AI could not extract any expenses.");
+      return ctx.reply(
+        "❌ Could not extract any expenses from your message. Try being more specific about amount and description."
+      );
     }
 
     // 2. READ EXISTING BLOB DATA
@@ -180,9 +258,34 @@ bot.on("text", async (ctx) => {
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
-    ctx.reply(
-      `A critical error occurred while processing (Blob/Token error). Check Vercel logs.`
-    );
+
+    // Check if it's a Gemini API error
+    if (
+      error.message.includes("503") ||
+      error.message.includes("overloaded") ||
+      error.message.includes("UNAVAILABLE")
+    ) {
+      ctx.reply(
+        "🚫 The AI service is temporarily overloaded. Please try again in a few minutes. " +
+          "This is a temporary issue with Google's servers."
+      );
+    } else if (
+      error.message.includes("rate limit") ||
+      error.message.includes("429")
+    ) {
+      ctx.reply(
+        "⏳ Rate limit exceeded. Please wait a moment before sending another expense."
+      );
+    } else if (error.message.includes("Blob")) {
+      ctx.reply(
+        "💾 There was an issue saving your data. Please try again or contact support."
+      );
+    } else {
+      ctx.reply(
+        "❌ An unexpected error occurred. Please try again later. " +
+          "If the problem persists, please contact support."
+      );
+    }
   }
 });
 
