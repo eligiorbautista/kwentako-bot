@@ -5,7 +5,7 @@ import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import dotenv from "dotenv";
-import { put, get, list } from "@vercel/blob";
+import { put, getBlob, list } from "@vercel/blob";
 
 // Load environment variables
 dotenv.config();
@@ -60,7 +60,7 @@ const jsonSchema = zodToJsonSchema(responseSchema);
  */
 const readBlobContent = async () => {
   try {
-    const response = await get(BLOB_FILE_KEY, {
+    const response = await getBlob(BLOB_FILE_KEY, {
       token: BLOB_READ_WRITE_TOKEN, // Uses the correctly mapped token
       cache: "no-store",
       type: "text",
