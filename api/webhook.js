@@ -84,7 +84,125 @@ const simplifiedJsonSchema = {
 };
 
 // -------------------------------------------------------------------
-// 3. VERCEL BLOB & GEMINI HELPERS
+// 3. CSV GENERATION & BLOB HELPERS
+// -------------------------------------------------------------------
+
+/**
+ * Generates initial CSV with metadata and headers
+ */
+const generateInitialCSV = () => {
+  const now = new Date();
+  const timestamp = now.toISOString();
+  
+  return `# KwentaKo Expense Tracker
+# Generated: ${timestamp}
+# Creator: ${CREATOR_NAME}
+# Total Expenses: ₱0.00
+# Total Records: 0
+#
+# CATEGORY BREAKDOWN:
+# Food: ₱0.00 (0%)
+# Transportation: ₱0.00 (0%)
+# Supplies: ₱0.00 (0%)
+# Utilities: ₱0.00 (0%)
+# Personal: ₱0.00 (0%)
+# Other: ₱0.00 (0%)
+#
+Date,Description,Amount (PHP),Category
+`;
+};
+
+/**
+ * Generates complete CSV with data, metadata and statistics
+ */
+const generateCompleteCSV = (expenseRecords) => {
+  const now = new Date();
+  const timestamp = now.toISOString();
+  
+  // Calculate statistics
+  const total = expenseRecords.reduce((sum, record) => sum + record.amount, 0);
+  const categoryTotals = {};
+  const categories = ["Food", "Transportation", "Supplies", "Utilities", "Personal", "Other"];
+  
+  // Initialize categories
+  categories.forEach(cat => categoryTotals[cat] = 0);
+  
+  // Calculate category totals
+  expenseRecords.forEach(record => {
+    categoryTotals[record.category] = (categoryTotals[record.category] || 0) + record.amount;
+  });
+  
+  // Generate category breakdown with percentages
+  const categoryBreakdown = categories.map(cat => {
+    const amount = categoryTotals[cat] || 0;
+    const percentage = total > 0 ? ((amount / total) * 100).toFixed(1) : '0.0';
+    return `# ${cat}: ₱${amount.toFixed(2)} (${percentage}%)`;
+  }).join('\n');
+  
+  // Generate CSV header with metadata
+  const header = `# KwentaKo Expense Tracker
+# Generated: ${timestamp}
+# Creator: ${CREATOR_NAME}
+# Total Expenses: ₱${total.toFixed(2)}
+# Total Records: ${expenseRecords.length}
+#
+# CATEGORY BREAKDOWN:
+${categoryBreakdown}
+#
+Date,Description,Amount (PHP),Category`;
+
+  // Generate data rows
+  const dataRows = expenseRecords.map(record => 
+    `${record.date},"${record.description}",${record.amount},${record.category}`
+  );
+  
+  return [header, ...dataRows].join('\n') + '\n';
+};
+
+/**
+ * Parses existing CSV content and extracts expense records
+ */
+const parseExistingCSV = (csvContent) => {
+  const lines = csvContent.split('\n');
+  const expenses = [];
+  
+  let inDataSection = false;
+  
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    
+    // Skip empty lines and comments
+    if (!trimmedLine || trimmedLine.startsWith('#')) {
+      continue;
+    }
+    
+    // Check if we've reached the header row
+    if (trimmedLine.startsWith('Date,Description,Amount')) {
+      inDataSection = true;
+      continue;
+    }
+    
+    // Parse data rows
+    if (inDataSection && trimmedLine) {
+      const parts = trimmedLine.split(',');
+      if (parts.length >= 4) {
+        const date = parts[0];
+        const description = parts[1].replace(/"/g, ''); // Remove quotes
+        const amount = parseFloat(parts[2]);
+        const category = parts[3];
+        
+        if (!isNaN(amount)) {
+          expenses.push({ date, description, amount, category });
+        }
+      }
+    }
+  }
+  
+  return expenses;
+};
+
+// -------------------------------------------------------------------
+// 4. VERCEL BLOB HELPERS  
 // -------------------------------------------------------------------
 
 /**
@@ -99,21 +217,26 @@ const readBlobContent = async () => {
       prefix: "expenses/", // Use folder prefix instead of exact file
     });
 
-    console.log("Listed blobs:", blobs?.map(b => ({pathname: b.pathname, uploadedAt: b.uploadedAt})));
+    console.log(
+      "Listed blobs:",
+      blobs?.map((b) => ({ pathname: b.pathname, uploadedAt: b.uploadedAt }))
+    );
 
     // Find the exact file we want
-    const targetBlob = blobs?.find(blob => blob.pathname === BLOB_FILE_KEY);
+    const targetBlob = blobs?.find((blob) => blob.pathname === BLOB_FILE_KEY);
 
-    // If no blob found with this key, return initial header
+    // If no blob found with this key, return initial CSV with metadata
     if (!targetBlob) {
-      console.log("No existing blob found with exact pathname, returning default header");
-      return "Date,Description,Amount (PHP),Category\n";
+      console.log(
+        "No existing blob found with exact pathname, returning default CSV"
+      );
+      return generateInitialCSV();
     }
 
     console.log("Found target blob:", {
       pathname: targetBlob.pathname,
       url: targetBlob.url,
-      uploadedAt: targetBlob.uploadedAt
+      uploadedAt: targetBlob.uploadedAt,
     });
 
     // Fetch the content from the URL with cache-busting
@@ -165,8 +288,8 @@ const readBlobContent = async () => {
         listError.message.includes("404") ||
         listError.message.includes("file not found")
       ) {
-        console.log("Blob doesn't exist, returning default header");
-        return "Date,Description,Amount (PHP),Category\n";
+        console.log("Blob doesn't exist, returning default CSV");
+        return generateInitialCSV();
       }
 
       throw new Error(`Blob Read Error: ${downloadError.message}`);
@@ -182,11 +305,11 @@ const readBlobContent = async () => {
 const writeBlobContent = async (newContent) => {
   console.log("Writing content to blob, length:", newContent.length);
   console.log("Content being written:", newContent);
-  
+
   // Create a unique filename to avoid caching issues
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
   const uniqueFilename = `expenses/kwentako_data_${timestamp}.csv`;
-  
+
   // Write to both the main file and a timestamped backup
   const results = await Promise.all([
     // Main file (with overwrite)
@@ -199,14 +322,14 @@ const writeBlobContent = async (newContent) => {
     // Timestamped backup
     put(uniqueFilename, newContent, {
       token: BLOB_READ_WRITE_TOKEN,
-      access: "public", 
+      access: "public",
       contentType: "text/csv",
-    })
+    }),
   ]);
-  
+
   console.log("Main file write result:", results[0]);
   console.log("Backup file write result:", results[1]);
-  
+
   return results[0]; // Return the main file result
 };
 
@@ -289,18 +412,18 @@ Simply send me your expenses. I will log them to secure Vercel Blob storage and 
 });
 
 // Add verification command
-bot.command('verify', async (ctx) => {
+bot.command("verify", async (ctx) => {
   try {
     const content = await readBlobContent();
-    const lines = content.split('\n').filter(line => line.trim() !== '');
+    const lines = content.split("\n").filter((line) => line.trim() !== "");
     const recordCount = lines.length - 1; // Subtract header
-    
+
     await ctx.replyWithHTML(
       `🔍 <b>Current CSV Status:</b>\n` +
-      `📊 Total records: ${recordCount}\n` +
-      `📝 File size: ${content.length} characters\n\n` +
-      `📥 <a href="https://cmb6ns1ho2tybzsb.public.blob.vercel-storage.com/expenses/kwentako_data.csv">Download Latest CSV</a>\n\n` +
-      `<code>${content}</code>`
+        `📊 Total records: ${recordCount}\n` +
+        `📝 File size: ${content.length} characters\n\n` +
+        `📥 <a href="https://cmb6ns1ho2tybzsb.public.blob.vercel-storage.com/expenses/kwentako_data.csv">Download Latest CSV</a>\n\n` +
+        `<code>${content}</code>`
     );
   } catch (error) {
     ctx.reply(`❌ Error reading blob: ${error.message}`);
@@ -339,42 +462,33 @@ bot.on("text", async (ctx) => {
 
     // 2. READ EXISTING BLOB DATA
     const existingContent = await readBlobContent();
-    console.log("Existing content read:", existingContent);
+    console.log("Existing content read, length:", existingContent.length);
 
-    // 3. Extract existing data lines (skip header)
-    const contentLines = existingContent.split("\n");
-    const header = contentLines[0];
-    const existingData = contentLines
-      .slice(1)
-      .filter((line) => line.trim() !== "");
-    
-    console.log("Existing data lines:", existingData);
+    // 3. PARSE EXISTING EXPENSES FROM CSV
+    const existingRecords = parseExistingCSV(existingContent);
+    console.log("Existing expense records:", existingRecords.length);
 
-    // 4. FORMAT AND COMBINE NEW DATA
-    const newCsvLines = newRecords.map(
-      (r) => `${r.date},"${r.description}",${r.amount},${r.category}`
-    );
-    
-    console.log("New CSV lines to add:", newCsvLines);
+    // 4. COMBINE ALL RECORDS
+    const allRecords = [...existingRecords, ...newRecords];
+    console.log("Total records after adding new:", allRecords.length);
 
-    const allData = [...existingData, ...newCsvLines];
-    const updatedContent = [header, ...allData].join("\n") + "\n"; // Add final newline
-    
-    console.log("Final content to write:", updatedContent);
+    // 5. GENERATE COMPLETE CSV WITH METADATA
+    const updatedContent = generateCompleteCSV(allRecords);
+    console.log("Generated CSV content, length:", updatedContent.length);
 
-    // 5. WRITE UPDATED CSV BACK TO BLOB
+    // 6. WRITE UPDATED CSV BACK TO BLOB
     const blobMetadata = await writeBlobContent(updatedContent);
     console.log("Blob write result:", blobMetadata);
 
-    // 6. CONFIRMATION AND DOWNLOAD LINK
-    const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
-    const totalLines = updatedContent.split('\n').filter(line => line.trim() !== '').length;
+    // 7. CALCULATE STATISTICS FOR RESPONSE
+    const newTotal = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
+    const grandTotal = allRecords.reduce((acc, curr) => acc + curr.amount, 0);
 
     await ctx.replyWithHTML(
-      `✅ Saved ${newRecords.length} items. Total: ₱${total.toFixed(2)}\n` +
-      `📊 CSV now has ${totalLines - 1} expense records\n\n` +
+      `✅ Added ${newRecords.length} new expenses (₱${newTotal.toFixed(2)})\n` +
+      `📊 Total expenses: ${allRecords.length} records (₱${grandTotal.toFixed(2)})\n\n` +
       `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
-      `🔍 Debug: File updated at ${new Date().toISOString()}`
+      `🔍 Updated: ${new Date().toISOString()}`
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
