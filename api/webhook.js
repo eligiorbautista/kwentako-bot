@@ -15,13 +15,12 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const CREATOR_NAME = "Eli Bautista";
 
-// --- GOOGLE SHEETS CONFIG (OLD VARIABLES USED FOR DEBUGGING) ---
+// --- GOOGLE SHEETS CONFIG ---
 const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
-const SHEET_NAME = process.env.SHEET_NAME || "Sheet1";
-// These are deprecated in favor of the BASE64 key, but kept for debugging the old error
+const SHEET_NAME = process.env.SHEET_NAME || "Expenses";
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY;
-const BASE64_CREDENTIALS = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64; // NEW: The robust key
+const BASE64_CREDENTIALS = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64; // The robust key
 
 // -------------------------------------------------------------------
 // 1. Client Setup & Authentication (CRITICAL FIX IMPLEMENTED HERE)
@@ -32,13 +31,12 @@ const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const model = "gemini-2.5-flash";
 
 let sheets;
-let auth;
 let authError = null;
+let credentials = {};
+let privateKeyFormatted = "";
 
 try {
-  let credentials = {};
-
-  // 1. Check if the robust BASE64 key is available
+  // 1. Prioritize the robust BASE64 key
   if (BASE64_CREDENTIALS) {
     // Decode the entire JSON file contents
     const decodedCredentialsString = Buffer.from(
@@ -48,14 +46,17 @@ try {
     credentials = JSON.parse(decodedCredentialsString);
     console.log("--- AUTH: Using Base64 Credentials (Robust Method) ---");
   } else {
-    // Fallback to the old method (which is currently failing)
+    // Fallback: If Base64 is missing, use the raw key string (THIS IS THE FAILING PATH)
     console.log(
       "--- AUTH: Falling back to Raw Key Method (Expect OpenSSL Error) ---"
     );
+
+    // Clean and format the raw key for the temporary fallback attempt
+    const rawKey = GOOGLE_PRIVATE_KEY ? GOOGLE_PRIVATE_KEY : "";
+    privateKeyFormatted = rawKey.trim().replace(/\\n/g, "\n");
+
     credentials.client_email = GOOGLE_CLIENT_EMAIL;
-    credentials.private_key = GOOGLE_PRIVATE_KEY
-      ? GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n")
-      : "";
+    credentials.private_key = privateKeyFormatted;
   }
 
   // 2. Initialize JWT Client
@@ -68,10 +69,10 @@ try {
   // 3. Initialize Sheets Client
   sheets = google.sheets({ version: "v4", auth });
 } catch (error) {
-  // Catch the decoding or initialization error
+  // Store the error for later use in user response and logs
   authError = error;
   console.error(
-    "FATAL AUTH ERROR: Key failed to decode/authenticate. Check BASE64 format.",
+    "FATAL AUTH ERROR: Key failed to decode/authenticate.",
     error.message
   );
   sheets = null;
@@ -139,7 +140,6 @@ const parseExpensesWithAI = async (text) => {
 const appendRecordsToSheet = async (records) => {
   // Check for authentication failure before proceeding
   if (!sheets) {
-    // Re-throw the original auth error
     throw new Error(
       authError
         ? authError.message
@@ -164,7 +164,9 @@ const appendRecordsToSheet = async (records) => {
   });
 };
 
-// ... (getStatsFromSheet remains the same, using the global 'sheets' client) ...
+/**
+ * Fetches all data from the sheet and calculates statistics.
+ */
 const getStatsFromSheet = async () => {
   // Check for authentication failure before proceeding
   if (!sheets) {
@@ -174,7 +176,6 @@ const getStatsFromSheet = async () => {
         : "Authentication failed during initialization."
     );
   }
-  // ... rest of getStatsFromSheet logic ...
 
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SPREADSHEET_ID,
@@ -228,8 +229,6 @@ const getStatsFromSheet = async () => {
 
   return { summary };
 };
-// ... (End of getStatsFromSheet) ...
-
 // -------------------------------------------------------------------
 // 3. Bot Commands and Handlers
 // -------------------------------------------------------------------
@@ -272,7 +271,6 @@ bot.on("text", async (ctx) => {
     }
 
     // --- WRITE TO GOOGLE SHEETS ---
-    // If successful, this line means the Base64 key worked.
     await appendRecordsToSheet(newRecords);
 
     const total = newRecords.reduce((acc, curr) => acc + curr.amount, 0);
