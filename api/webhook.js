@@ -42,6 +42,10 @@ const bot = new Telegraf(BOT_TOKEN);
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const model = "gemini-2.5-flash"; // Lighter model, sufficient for expense parsing
 
+// Simple message tracking to prevent duplicates
+const processedMessages = new Set();
+const MESSAGE_CACHE_SIZE = 100;
+
 // --- Simplified Schema for Better Performance ---
 const expenseSchema = z.object({
   description: z.string().describe("Brief expense description"),
@@ -93,7 +97,7 @@ const simplifiedJsonSchema = {
 const generateInitialCSV = () => {
   const now = new Date();
   const timestamp = now.toISOString();
-  
+
   return `# KwentaKo Expense Tracker
 # Generated: ${timestamp}
 # Creator: ${CREATOR_NAME}
@@ -118,27 +122,38 @@ Date,Description,Amount (PHP),Category
 const generateCompleteCSV = (expenseRecords) => {
   const now = new Date();
   const timestamp = now.toISOString();
-  
+
   // Calculate statistics
   const total = expenseRecords.reduce((sum, record) => sum + record.amount, 0);
   const categoryTotals = {};
-  const categories = ["Food", "Transportation", "Supplies", "Utilities", "Personal", "Other"];
-  
+  const categories = [
+    "Food",
+    "Transportation",
+    "Supplies",
+    "Utilities",
+    "Personal",
+    "Other",
+  ];
+
   // Initialize categories
-  categories.forEach(cat => categoryTotals[cat] = 0);
-  
+  categories.forEach((cat) => (categoryTotals[cat] = 0));
+
   // Calculate category totals
-  expenseRecords.forEach(record => {
-    categoryTotals[record.category] = (categoryTotals[record.category] || 0) + record.amount;
+  expenseRecords.forEach((record) => {
+    categoryTotals[record.category] =
+      (categoryTotals[record.category] || 0) + record.amount;
   });
-  
+
   // Generate category breakdown with percentages
-  const categoryBreakdown = categories.map(cat => {
-    const amount = categoryTotals[cat] || 0;
-    const percentage = total > 0 ? ((amount / total) * 100).toFixed(1) : '0.0';
-    return `# ${cat}: ₱${amount.toFixed(2)} (${percentage}%)`;
-  }).join('\n');
-  
+  const categoryBreakdown = categories
+    .map((cat) => {
+      const amount = categoryTotals[cat] || 0;
+      const percentage =
+        total > 0 ? ((amount / total) * 100).toFixed(1) : "0.0";
+      return `# ${cat}: ₱${amount.toFixed(2)} (${percentage}%)`;
+    })
+    .join("\n");
+
   // Generate CSV header with metadata
   const header = `# KwentaKo Expense Tracker
 # Generated: ${timestamp}
@@ -152,57 +167,58 @@ ${categoryBreakdown}
 Date,Description,Amount (PHP),Category`;
 
   // Generate data rows
-  const dataRows = expenseRecords.map(record => 
-    `${record.date},"${record.description}",${record.amount},${record.category}`
+  const dataRows = expenseRecords.map(
+    (record) =>
+      `${record.date},"${record.description}",${record.amount},${record.category}`
   );
-  
-  return [header, ...dataRows].join('\n') + '\n';
+
+  return [header, ...dataRows].join("\n") + "\n";
 };
 
 /**
  * Parses existing CSV content and extracts expense records
  */
 const parseExistingCSV = (csvContent) => {
-  const lines = csvContent.split('\n');
+  const lines = csvContent.split("\n");
   const expenses = [];
-  
+
   let inDataSection = false;
-  
+
   for (const line of lines) {
     const trimmedLine = line.trim();
-    
+
     // Skip empty lines and comments
-    if (!trimmedLine || trimmedLine.startsWith('#')) {
+    if (!trimmedLine || trimmedLine.startsWith("#")) {
       continue;
     }
-    
+
     // Check if we've reached the header row
-    if (trimmedLine.startsWith('Date,Description,Amount')) {
+    if (trimmedLine.startsWith("Date,Description,Amount")) {
       inDataSection = true;
       continue;
     }
-    
+
     // Parse data rows
     if (inDataSection && trimmedLine) {
-      const parts = trimmedLine.split(',');
+      const parts = trimmedLine.split(",");
       if (parts.length >= 4) {
         const date = parts[0];
-        const description = parts[1].replace(/"/g, ''); // Remove quotes
+        const description = parts[1].replace(/"/g, ""); // Remove quotes
         const amount = parseFloat(parts[2]);
         const category = parts[3];
-        
+
         if (!isNaN(amount)) {
           expenses.push({ date, description, amount, category });
         }
       }
     }
   }
-  
+
   return expenses;
 };
 
 // -------------------------------------------------------------------
-// 4. VERCEL BLOB HELPERS  
+// 4. VERCEL BLOB HELPERS
 // -------------------------------------------------------------------
 
 /**
@@ -433,21 +449,65 @@ bot.command("verify", async (ctx) => {
 // Main text handler
 bot.on("text", async (ctx) => {
   const text = ctx.message.text;
+  const userId = ctx.message.from.id;
+  const messageId = ctx.message.message_id;
+  
+  // Create a unique identifier for this message
+  const messageKey = `${userId}:${messageId}:${text.substring(0, 50)}`;
+  
+  // Check if we've already processed this message
+  if (processedMessages.has(messageKey)) {
+    console.log("Skipping duplicate message:", messageKey);
+    return;
+  }
+  
+  // Add to processed messages (with size limit)
+  processedMessages.add(messageKey);
+  if (processedMessages.size > MESSAGE_CACHE_SIZE) {
+    const firstKey = processedMessages.values().next().value;
+    processedMessages.delete(firstKey);
+  }
+  
+  // Skip if it's a command
   if (text.startsWith("/")) return;
+
+  // Skip if message is from the bot itself (safety check)
+  if (ctx.message.from.is_bot) {
+    console.log("Ignoring bot message:", text);
+    return;
+  }
 
   // Basic input validation to reduce unnecessary API calls
   if (!text || text.trim().length < 3) {
     return ctx.reply("Please provide more details about your expense.");
   }
 
-  // Check for obvious non-expense messages
-  const nonExpensePatterns =
-    /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|what|how|why)$/i;
-  if (nonExpensePatterns.test(text.trim())) {
+  // Enhanced filtering for non-expense messages
+  const nonExpensePatterns = /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|what|how|why|good|bad|nice|cool|awesome|great|perfect|done|finished|complete|stop|end|quit|exit|help|info|about)$/i;
+  
+  // Check for bot-like responses (emojis, formatted text patterns)
+  const botResponsePatterns = /^[✅❌📊📥🔍🤖]/i;
+  const htmlLinkPattern = /<a href=/i;
+  const csvDataPattern = /^(Date|#|\d{4}-\d{2}-\d{2})/i;
+  
+  if (nonExpensePatterns.test(text.trim()) || 
+      botResponsePatterns.test(text.trim()) || 
+      htmlLinkPattern.test(text) ||
+      csvDataPattern.test(text)) {
+    
+    console.log("Filtered out non-expense message:", text);
     return ctx.reply(
       "I help track expenses. Please send me details like 'bought lunch 150 pesos' or 'taxi fare 80 php'."
     );
   }
+
+  // Additional check: if message looks like a previous expense entry, skip it
+  if (text.includes(',"') && text.includes(',')) {
+    console.log("Skipping what appears to be CSV data:", text);
+    return ctx.reply("I see that looks like CSV data. Please send me new expense details in natural language.");
+  }
+
+  console.log(`Processing expense message from user ${userId}: "${text}"`);
 
   try {
     await ctx.reply("🤖 Analyzing expense with Gemini AI...");
@@ -486,9 +546,11 @@ bot.on("text", async (ctx) => {
 
     await ctx.replyWithHTML(
       `✅ Added ${newRecords.length} new expenses (₱${newTotal.toFixed(2)})\n` +
-      `📊 Total expenses: ${allRecords.length} records (₱${grandTotal.toFixed(2)})\n\n` +
-      `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
-      `🔍 Updated: ${new Date().toISOString()}`
+        `📊 Total expenses: ${allRecords.length} records (₱${grandTotal.toFixed(
+          2
+        )})\n\n` +
+        `📥 Download CSV: <a href="${blobMetadata.url}">Click here</a>\n\n` +
+        `🔍 Updated: ${new Date().toISOString()}`
     );
   } catch (error) {
     console.error("Critical Blob/Gemini Error:", error);
