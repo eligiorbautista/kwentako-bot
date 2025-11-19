@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@google/genai": "^0.15.0",
+    "@vercel/blob": "^2.0.0",
     "csv-parser": "^3.0.0",
     "csv-writer": "^1.6.0",
     "dotenv": "^16.4.5",
