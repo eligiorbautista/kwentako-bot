@@ -243,12 +243,36 @@ bot.on("text", async (ctx) => {
     );
   } catch (error) {
     // Log the full error to Vercel logs for inspection
-    console.error("Error processing with Sheets:", error.message);
+    // Log the whole error object to make debugging easier in logs
+    console.error("Error processing with Sheets:", error);
 
-    // Respond to the user with the generic error message
-    ctx.reply(
-      "Error saving data. Check your Sheet ID, Permissions, or Vercel logs."
-    );
+    // Send a safer, more helpful message to the user when running in debug mode.
+    // In production we keep the generic message to avoid leaking sensitive info.
+    const isDebug =
+      process.env.DEBUG === "true" || process.env.NODE_ENV !== "production";
+
+    const baseMessage =
+      "Error saving data. Check your Sheet ID, Permissions, or Vercel logs.";
+
+    if (isDebug) {
+      // Keep the message concise for the user but include the error message and
+      // a short, truncated stack preview to speed up triage during development.
+      const errMessage = error && error.message ? error.message : String(error);
+      const stackPreview =
+        error && error.stack
+          ? error.stack.split("\n").slice(0, 4).join("\n")
+          : null;
+
+      const debugReply = stackPreview
+        ? `Error saving data: ${errMessage}\n\nStack (truncated):\n${stackPreview}`
+        : `Error saving data: ${errMessage}`;
+
+      // Use await here because we're inside an async handler
+      await ctx.reply(debugReply);
+    } else {
+      // Production: do not include internals in the reply
+      await ctx.reply(baseMessage);
+    }
   }
 });
 
